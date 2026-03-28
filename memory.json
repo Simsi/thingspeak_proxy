@@ -1,0 +1,9 @@
+{
+  "devices": [
+    {
+      "name": "sensor1",
+      "thingspeak_url": "https://thingspeak.mathworks.com/channels/2918084"
+    }
+  ],
+  "destinations": []
+}

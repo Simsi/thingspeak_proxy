@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Мониторинг | ThingSpeak Monitor</title>
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Мониторинг</h1>
+      <p class="muted">Пользователь: {{ username }}</p>
+    </div>
+    <div class="topbar-actions">
+      <div class="status-box">
+        <div>Последний опрос: {{ runtime_status.last_poll_at or 'ещё не выполнялся' }}</div>
+        <div>Последний успех: {{ runtime_status.last_success_at or 'ещё не выполнялся' }}</div>
+        <div>Последняя ошибка: {{ runtime_status.last_error or 'нет' }}</div>
+      </div>
+      <form method="post" action="{{ url_for('web.logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary-button">Выйти</button>
+      </form>
+    </div>
+  </header>
+
+  <main class="monitor-grid" id="monitor-app">
+    <section class="charts-panel">
+      <div class="device-select-row">
+        <label for="device-select">Выбрать устройство</label>
+        <select id="device-select"></select>
+      </div>
+      <div id="message-box"></div>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <div class="chart-title">Тепловой поток</div>
+          <svg id="chart-warm-stream" class="chart-svg" viewBox="0 0 500 240"></svg>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Температура поверхности</div>
+          <svg id="chart-surface-temp" class="chart-svg" viewBox="0 0 500 240"></svg>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Температура воздуха</div>
+          <svg id="chart-air-temp" class="chart-svg" viewBox="0 0 500 240"></svg>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Влажность воздуха</div>
+          <svg id="chart-air-hum" class="chart-svg" viewBox="0 0 500 240"></svg>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side-panel">
+      <section class="table-card">
+        <div class="table-header">Настроенные устройства</div>
+        <table id="devices-table">
+          <thead>
+            <tr>
+              <th>dev name</th>
+              <th>dev thingspeak url</th>
+              <th>device hash</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in devices %}
+            <tr>
+              <td><input data-field="name" value="{{ item.name }}"></td>
+              <td><input data-field="thingspeak_url" value="{{ item.thingspeak_url }}"></td>
+              <td><input data-field="device_hash" value="{{ item.device_hash }}" readonly></td>
+              <td><button type="button" class="danger-inline" data-action="delete-row">Удалить</button></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div class="table-actions">
+          <button type="button" id="add-device" class="secondary-button">Добавить</button>
+          <button type="button" id="save-devices" class="primary-button">Сохранить</button>
+        </div>
+      </section>
+
+      <section class="table-card">
+        <div class="table-header">Конечные серверы</div>
+        <table id="destinations-table">
+          <thead>
+            <tr>
+              <th>dest name</th>
+              <th>dest ip/host</th>
+              <th>port</th>
+              <th>data destination url</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in destinations %}
+            <tr>
+              <td><input data-field="name" value="{{ item.name }}"></td>
+              <td><input data-field="host" value="{{ item.host }}"></td>
+              <td><input data-field="port" value="{{ item.port }}"></td>
+              <td><input data-field="path" value="{{ item.path }}"></td>
+              <td><button type="button" class="danger-inline" data-action="delete-row">Удалить</button></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div class="table-actions">
+          <button type="button" id="add-destination" class="secondary-button">Добавить</button>
+          <button type="button" id="save-destinations" class="primary-button">Сохранить</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    window.APP_BOOTSTRAP = {{ {
+      'devices': devices,
+      'destinations': destinations,
+      'csrf_token': csrf_token,
+      'bootstrap_url': url_for('web.bootstrap'),
+      'measurements_url': url_for('web.measurements'),
+      'replace_devices_url': url_for('web.replace_devices'),
+      'replace_destinations_url': url_for('web.replace_destinations')
+    } | tojson }};
+  </script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

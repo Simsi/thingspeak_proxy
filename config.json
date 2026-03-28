@@ -1,0 +1,15 @@
+{
+  "secret_key": "change-this-secret-key-before-production-123",
+  "poll_interval_seconds": 15,
+  "thingspeak_results_per_request": 100,
+  "session_cookie_secure": false,
+  "session_cookie_httponly": true,
+  "session_cookie_samesite": "Lax",
+  "log_level": "INFO",
+  "users": [
+    {
+      "username": "admin",
+      "password": "admin"
+    }
+  ]
+}

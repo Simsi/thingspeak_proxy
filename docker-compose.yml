@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: thingspeak_monitor_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-monitoring}
+      POSTGRES_USER: ${POSTGRES_USER:-monitor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-monitor}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-monitor} -d ${POSTGRES_DB:-monitoring}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - monitor_net
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: thingspeak_monitor_web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-monitor}:${POSTGRES_PASSWORD:-monitor}@db:5432/${POSTGRES_DB:-monitoring}
+      APP_CONFIG_PATH: /app/config.json
+      APP_MEMORY_PATH: /app/memory.json
+      ENABLE_POLLER: "1"
+    ports:
+      - "${WEB_EXTERNAL_PORT:-8080}:8000"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./memory.json:/app/memory.json
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - monitor_net
+
+networks:
+  monitor_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
