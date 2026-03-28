@@ -152,12 +152,16 @@ def measurements() -> Response:
     if not device_hash and not device_name:
         return jsonify({"ok": False, "error": "Не передан device_hash или device_name"}), 400
 
-    db = current_app.extensions["database"]
-    if device_hash:
-        rows = db.get_measurements(device_hash=device_hash, limit=300)
-    else:
-        rows = db.get_measurements(device_name=device_name, limit=300)
+    limit_arg = request.args.get("limit", "").strip()
+    limit: int | None = None
+    if limit_arg:
+        try:
+            limit = max(1, min(int(limit_arg), 10000))
+        except ValueError:
+            return jsonify({"ok": False, "error": "Параметр limit должен быть числом"}), 400
 
+    db = current_app.extensions["database"]
+    rows = db.get_measurements(device_hash=device_hash or None, device_name=device_name or None, limit=limit)
     return jsonify(
         {
             "ok": True,

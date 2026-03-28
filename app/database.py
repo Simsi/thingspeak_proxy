@@ -44,7 +44,7 @@ class Database:
             ).scalar_one_or_none()
             return int(result or 0)
 
-    def insert_measurement(self, payload: dict) -> bool:
+    def upsert_measurement(self, payload: dict) -> bool:
         values = {
             "device_name": payload["device_name"],
             "device_hash": payload["device_hash"],
@@ -56,38 +56,33 @@ class Database:
             "source_created_at": payload.get("source_created_at"),
         }
 
-        stmt = (
-            pg_insert(Measurement)
-            .values(**values)
-            .on_conflict_do_nothing(index_elements=["device_hash", "event_id"])
-            .returning(Measurement.id)
-        )
+        stmt = pg_insert(Measurement).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["device_hash", "event_id"],
+            set_={
+                "device_name": stmt.excluded.device_name,
+                "air_temp": stmt.excluded.air_temp,
+                "air_hum": stmt.excluded.air_hum,
+                "warm_stream": stmt.excluded.warm_stream,
+                "surface_temp": stmt.excluded.surface_temp,
+                "source_created_at": stmt.excluded.source_created_at,
+            },
+        ).returning(Measurement.id)
 
         with self.session() as session:
-            inserted_id = session.execute(stmt).scalar_one_or_none()
-            return inserted_id is not None
+            changed_id = session.execute(stmt).scalar_one_or_none()
+            return changed_id is not None
 
-    def get_measurements(
-        self,
-        *,
-        device_hash: str | None = None,
-        device_name: str | None = None,
-        limit: int = 120,
-    ) -> list[Measurement]:
+    def get_measurements(self, *, device_hash: str | None = None, device_name: str | None = None, limit: int | None = None) -> list[Measurement]:
         if not device_hash and not device_name:
-            raise ValueError("device_hash или device_name обязателен")
-
+            return []
         with self.session() as session:
             stmt = select(Measurement)
             if device_hash:
                 stmt = stmt.where(Measurement.device_hash == device_hash)
-            else:
+            elif device_name:
                 stmt = stmt.where(Measurement.device_name == device_name)
-
-            rows = list(
-                session.execute(
-                    stmt.order_by(Measurement.event_id.desc()).limit(limit)
-                ).scalars()
-            )
-        rows.reverse()
-        return rows
+            stmt = stmt.order_by(Measurement.source_created_at.asc().nulls_last(), Measurement.event_id.asc())
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            return list(session.execute(stmt).scalars())

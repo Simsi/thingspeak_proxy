@@ -268,3 +268,12 @@ button {
 .chart-point {
   fill: #111827;
 }
+
+.device-meta {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chart-dot {
+  fill: #111827;
+}

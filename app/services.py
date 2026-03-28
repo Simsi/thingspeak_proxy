@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from json import JSONDecodeError
 from typing import Any
 
 import requests
@@ -26,159 +26,33 @@ class RuntimeStatus:
 
 
 class ThingSpeakClient:
-    API_BASE_URLS = (
-        "https://api.thingspeak.com",
-        "https://thingspeak.mathworks.com",
-    )
-    MAX_RESULTS_PER_REQUEST = 8000
+    API_BASE_URL = "https://api.thingspeak.com"
 
     def __init__(self, results_per_request: int = 100) -> None:
-        self.results_per_request = results_per_request
+        self.results_per_request = max(1, min(int(results_per_request), 8000))
         self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "Accept": "application/json",
-                "User-Agent": "thingspeak-monitor/1.0",
-            }
-        )
+        self.session.headers.update({"User-Agent": "thingspeak-monitor/1.0"})
 
     def fetch_recent(self, channel_id: str) -> dict[str, Any]:
-        return self._fetch(
-            channel_id,
-            params={"results": min(self.results_per_request, self.MAX_RESULTS_PER_REQUEST)},
-        )
+        return self._fetch(channel_id, results=self.results_per_request)
 
-    def fetch_history(self, channel_id: str) -> dict[str, Any]:
-        all_feeds: list[dict[str, Any]] = []
-        seen_entry_ids: set[int] = set()
-        end_cursor: datetime | None = None
-        page_number = 0
-        channel_info: dict[str, Any] = {}
+    def fetch_page(self, channel_id: str, *, results: int = 8000, end: datetime | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"results": max(1, min(int(results), 8000))}
+        if end is not None:
+            params["end"] = end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        return self._fetch(channel_id, **params)
 
-        while True:
-            page_number += 1
-            params: dict[str, Any] = {"results": self.MAX_RESULTS_PER_REQUEST}
-            if end_cursor is not None:
-                params["end"] = format_thingspeak_datetime(end_cursor)
-
-            payload = self._fetch(channel_id, params=params)
-            channel = payload.get("channel")
-            if isinstance(channel, dict) and channel:
-                channel_info = channel
-
-            feeds = payload.get("feeds", [])
-            if not isinstance(feeds, list) or not feeds:
-                break
-
-            page_feeds: list[dict[str, Any]] = []
-            oldest_created_at: datetime | None = None
-
-            for feed in feeds:
-                try:
-                    entry_id = int(feed.get("entry_id") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if entry_id <= 0 or entry_id in seen_entry_ids:
-                    continue
-
-                seen_entry_ids.add(entry_id)
-                page_feeds.append(feed)
-
-                created_at = parse_created_at(feed.get("created_at"))
-                if created_at is not None and (oldest_created_at is None or created_at < oldest_created_at):
-                    oldest_created_at = created_at
-
-            if page_feeds:
-                all_feeds.extend(page_feeds)
-
-            logger.info(
-                "ThingSpeak history backfill page %s for channel %s: received=%s unique=%s",
-                page_number,
-                channel_id,
-                len(feeds),
-                len(page_feeds),
-            )
-
-            if len(feeds) < self.MAX_RESULTS_PER_REQUEST:
-                break
-            if oldest_created_at is None:
-                logger.warning(
-                    "Cannot continue historical backfill for channel %s: oldest item has no created_at",
-                    channel_id,
-                )
-                break
-
-            next_end_cursor = oldest_created_at - timedelta(seconds=1)
-            if end_cursor is not None and next_end_cursor >= end_cursor:
-                logger.warning(
-                    "Stopping historical backfill for channel %s to avoid pagination loop",
-                    channel_id,
-                )
-                break
-            end_cursor = next_end_cursor
-
-        all_feeds.sort(key=lambda item: int(item.get("entry_id") or 0))
-        return {"channel": channel_info, "feeds": all_feeds}
-
-    def _fetch(self, channel_id: str, params: dict[str, Any]) -> dict[str, Any]:
-        errors: list[str] = []
-
-        for base_url in self.API_BASE_URLS:
-            url = f"{base_url}/channels/{channel_id}/feeds.json"
-            try:
-                response = self.session.get(
-                    url,
-                    params=params,
-                    timeout=(5, 20),
-                )
-                response.raise_for_status()
-
-                raw_text = response.text.strip()
-                if raw_text == "-1":
-                    raise ValueError(
-                        f"ThingSpeak отклонил доступ к каналу {channel_id}. "
-                        "Для приватного канала нужен read api_key."
-                    )
-
-                try:
-                    data = response.json()
-                except JSONDecodeError as exc:
-                    preview = raw_text[:200].replace("\n", " ").replace("\r", " ")
-                    raise ValueError(
-                        f"ThingSpeak вернул не JSON для канала {channel_id} по адресу {url}: {preview!r}"
-                    ) from exc
-
-                if not isinstance(data, dict):
-                    raise ValueError(
-                        f"ThingSpeak вернул неожиданный формат данных для канала {channel_id}"
-                    )
-                feeds = data.get("feeds")
-                if not isinstance(feeds, list):
-                    raise ValueError(
-                        f"ThingSpeak вернул некорректное поле feeds для канала {channel_id}"
-                    )
-
-                logger.debug(
-                    "ThingSpeak: канал %s успешно прочитан через %s, записей=%s, params=%s",
-                    channel_id,
-                    url,
-                    len(feeds),
-                    params,
-                )
-                return data
-            except (requests.RequestException, ValueError) as exc:
-                logger.warning(
-                    "Не удалось прочитать канал %s через %s: %s",
-                    channel_id,
-                    url,
-                    exc,
-                )
-                errors.append(f"{url}: {exc}")
-
-        raise RuntimeError(
-            f"Не удалось получить данные ThingSpeak для канала {channel_id}. "
-            f"Проверены адреса: {'; '.join(errors)}"
-        )
+    def _fetch(self, channel_id: str, **params: Any) -> dict[str, Any]:
+        url = f"{self.API_BASE_URL}/channels/{channel_id}/feeds.json"
+        response = self.session.get(url, params=params, timeout=(5, 20))
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("ThingSpeak вернул неожиданный формат данных")
+        feeds = data.get("feeds")
+        if feeds is None or not isinstance(feeds, list):
+            raise ValueError("ThingSpeak не вернул список feeds")
+        return data
 
 
 class DestinationDispatcher:
@@ -245,47 +119,11 @@ class SensorPoller:
     def backfill_existing_data(self) -> None:
         snapshot = self.memory_store.get_snapshot()
         devices = snapshot.get("devices", [])
-
         if not devices:
             logger.info("Историческая загрузка пропущена: список устройств пуст")
             return
-
         for device in devices:
             self._backfill_device(device)
-
-    def _backfill_device(self, device: dict[str, Any]) -> None:
-        device_name = device["name"]
-        device_hash = device["device_hash"]
-        logger.info("Старт исторической загрузки для устройства %s (канал %s)", device_name, device_hash)
-
-        payload = self.thingspeak_client.fetch_history(device_hash)
-        feeds = payload.get("feeds", [])
-        if not isinstance(feeds, list):
-            raise ValueError(f"ThingSpeak вернул некорректное поле feeds для {device_name}")
-
-        inserted_count = 0
-        duplicate_count = 0
-        invalid_count = 0
-        for feed in feeds:
-            try:
-                normalized = normalize_measurement(device_name, device_hash, feed)
-            except ValueError:
-                invalid_count += 1
-                continue
-            inserted = self.database.insert_measurement(normalized)
-            if inserted:
-                inserted_count += 1
-            else:
-                duplicate_count += 1
-
-        logger.info(
-            "Историческая загрузка устройства %s завершена: получено=%s, добавлено=%s, уже было=%s, пропущено некорректных=%s",
-            device_name,
-            len(feeds),
-            inserted_count,
-            duplicate_count,
-            invalid_count,
-        )
 
     def _run_forever(self) -> None:
         while not self.stop_event.is_set():
@@ -314,6 +152,67 @@ class SensorPoller:
         self.runtime_status.last_success_at = datetime.utcnow().isoformat() + "Z"
         self.runtime_status.last_error = None
 
+    def _backfill_device(self, device: dict[str, Any]) -> None:
+        device_name = device["name"]
+        device_hash = device["device_hash"]
+        logger.info("Стартовая загрузка истории для %s (канал %s)", device_name, device_hash)
+
+        end: datetime | None = None
+        total_seen = 0
+        total_changed = 0
+        page_no = 0
+        previous_oldest_entry_id: int | None = None
+
+        while True:
+            page_no += 1
+            payload = self.thingspeak_client.fetch_page(device_hash, results=8000, end=end)
+            channel_info = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+            mapping = detect_field_mapping(channel_info)
+            feeds = payload.get("feeds", [])
+            if not feeds:
+                break
+
+            page_changed = 0
+            page_seen = 0
+            ordered_feeds = sorted(feeds, key=lambda item: int(item.get("entry_id") or 0))
+            for feed in ordered_feeds:
+                normalized = normalize_measurement(device_name, device_hash, feed, mapping)
+                if self.database.upsert_measurement(normalized):
+                    page_changed += 1
+                page_seen += 1
+
+            total_seen += page_seen
+            total_changed += page_changed
+
+            oldest_feed = ordered_feeds[0]
+            oldest_entry_id = int(oldest_feed.get("entry_id") or 0)
+            oldest_created_at = parse_created_at(oldest_feed.get("created_at"))
+            logger.info(
+                "История %s: страница %s, получено %s, вставлено/обновлено %s, oldest_entry_id=%s",
+                device_name,
+                page_no,
+                page_seen,
+                page_changed,
+                oldest_entry_id,
+            )
+
+            if page_seen < 8000:
+                break
+            if previous_oldest_entry_id is not None and oldest_entry_id >= previous_oldest_entry_id:
+                break
+            if oldest_created_at is None:
+                break
+
+            previous_oldest_entry_id = oldest_entry_id
+            end = oldest_created_at - timedelta(seconds=1)
+
+        logger.info(
+            "Историческая загрузка %s завершена: обработано %s записей, вставлено/обновлено %s",
+            device_name,
+            total_seen,
+            total_changed,
+        )
+
     def _poll_device(self, device: dict[str, Any], destinations: list[dict[str, Any]]) -> None:
         device_name = device["name"]
         device_hash = device["device_hash"]
@@ -321,34 +220,74 @@ class SensorPoller:
 
         last_event_id = self.database.get_last_event_id(device_hash)
         payload = self.thingspeak_client.fetch_recent(device_hash)
+        channel_info = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+        mapping = detect_field_mapping(channel_info)
         feeds = payload.get("feeds", [])
-        if not isinstance(feeds, list):
-            raise ValueError(f"ThingSpeak вернул некорректное поле feeds для {device_name}")
 
         inserted_count = 0
         for feed in sorted(feeds, key=lambda item: int(item.get("entry_id") or 0)):
             event_id = int(feed.get("entry_id") or 0)
             if event_id <= last_event_id:
                 continue
-            normalized = normalize_measurement(device_name, device_hash, feed)
-            inserted = self.database.insert_measurement(normalized)
-            if inserted:
+            normalized = normalize_measurement(device_name, device_hash, feed, mapping)
+            if self.database.upsert_measurement(normalized):
                 inserted_count += 1
-                self.dispatcher.dispatch(
-                    destinations,
-                    {
-                        "device_name": normalized["device_name"],
-                        "device_hash": normalized["device_hash"],
-                        "event_id": normalized["event_id"],
-                        "air_temp": normalized["air_temp"],
-                        "air_hum": normalized["air_hum"],
-                        "warm_stream": normalized["warm_stream"],
-                        "surface_temp": normalized["surface_temp"],
-                    },
-                )
+                self.dispatcher.dispatch(destinations, {
+                    "device_name": normalized["device_name"],
+                    "device_hash": normalized["device_hash"],
+                    "event_id": normalized["event_id"],
+                    "air_temp": normalized["air_temp"],
+                    "air_hum": normalized["air_hum"],
+                    "warm_stream": normalized["warm_stream"],
+                    "surface_temp": normalized["surface_temp"],
+                })
 
-        logger.info("Устройство %s: добавлено новых записей %s", device_name, inserted_count)
+        logger.info("Устройство %s: вставлено/обновлено записей %s", device_name, inserted_count)
 
+
+DEFAULT_FIELD_MAPPING = {
+    "surface_temp": "field1",
+    "warm_stream": "field2",
+    "air_hum": "field3",
+    "air_temp": "field4",
+}
+
+FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "surface_temp": ("surface", "поверх", "стекл", "skin temp"),
+    "warm_stream": ("warm stream", "heat flux", "теплов", "поток", "flux", "wt/m", "вт/м"),
+    "air_temp": ("air temp", "air temperature", "температура воздуха", "воздух"),
+    "air_hum": ("humidity", "влажн", "hum"),
+}
+
+
+def _normalize_label(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).strip().lower()
+    return " ".join(normalized.split())
+
+
+def detect_field_mapping(channel_info: dict[str, Any] | None) -> dict[str, str]:
+    mapping = dict(DEFAULT_FIELD_MAPPING)
+    if not channel_info:
+        return mapping
+
+    available: dict[str, str] = {}
+    for index in range(1, 9):
+        field_key = f"field{index}"
+        field_label = channel_info.get(field_key)
+        if isinstance(field_label, str) and field_label.strip():
+            available[field_key] = _normalize_label(field_label)
+
+    used_fields: set[str] = set()
+    for semantic_name, keywords in FIELD_KEYWORDS.items():
+        for field_key, field_label in available.items():
+            if field_key in used_fields:
+                continue
+            if any(keyword in field_label for keyword in keywords):
+                mapping[semantic_name] = field_key
+                used_fields.add(field_key)
+                break
+
+    return mapping
 
 
 def parse_float(value: Any) -> float | None:
@@ -363,7 +302,6 @@ def parse_float(value: Any) -> float | None:
     return parsed
 
 
-
 def sanitize_number(value: Any) -> float | int | None:
     if value is None:
         return None
@@ -376,39 +314,41 @@ def sanitize_number(value: Any) -> float | int | None:
     return value
 
 
-
 def sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: sanitize_number(value) for key, value in payload.items()}
-
 
 
 def parse_created_at(value: Any) -> datetime | None:
     if not value:
         return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
     try:
-        return parsedate_to_datetime(value)
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except (TypeError, ValueError, IndexError):
         return None
 
 
-
-def format_thingspeak_datetime(value: datetime) -> str:
-    return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-
-
-
-def normalize_measurement(device_name: str, device_hash: str, feed: dict[str, Any]) -> dict[str, Any]:
+def normalize_measurement(device_name: str, device_hash: str, feed: dict[str, Any], field_mapping: dict[str, str] | None = None) -> dict[str, Any]:
     event_id = int(feed.get("entry_id") or 0)
     if event_id <= 0:
         raise ValueError(f"Некорректный entry_id для устройства {device_name}")
-
+    mapping = field_mapping or DEFAULT_FIELD_MAPPING
     return {
         "device_name": device_name,
         "device_hash": device_hash,
         "event_id": event_id,
-        "warm_stream": parse_float(feed.get("field1")),
-        "surface_temp": parse_float(feed.get("field2")),
-        "air_temp": parse_float(feed.get("field3")),
-        "air_hum": parse_float(feed.get("field4")),
+        "warm_stream": parse_float(feed.get(mapping["warm_stream"])),
+        "surface_temp": parse_float(feed.get(mapping["surface_temp"])),
+        "air_temp": parse_float(feed.get(mapping["air_temp"])),
+        "air_hum": parse_float(feed.get(mapping["air_hum"])),
         "source_created_at": parse_created_at(feed.get("created_at")),
     }
