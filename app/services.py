@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from json import JSONDecodeError
 from typing import Any
 
 import requests
@@ -25,22 +26,79 @@ class RuntimeStatus:
 
 
 class ThingSpeakClient:
+    API_BASE_URLS = (
+        "https://api.thingspeak.com",
+        "https://thingspeak.mathworks.com",
+    )
+
     def __init__(self, results_per_request: int = 100) -> None:
         self.results_per_request = results_per_request
         self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "Accept": "application/json",
+                "User-Agent": "thingspeak-monitor/1.0",
+            }
+        )
 
     def fetch_recent(self, channel_id: str) -> dict[str, Any]:
-        url = f"https://thingspeak.mathworks.com/channels/{channel_id}/feeds.json"
-        response = self.session.get(
-            url,
-            params={"results": self.results_per_request},
-            timeout=(5, 15),
+        errors: list[str] = []
+
+        for base_url in self.API_BASE_URLS:
+            url = f"{base_url}/channels/{channel_id}/feeds.json"
+            try:
+                response = self.session.get(
+                    url,
+                    params={"results": self.results_per_request},
+                    timeout=(5, 15),
+                )
+                response.raise_for_status()
+
+                raw_text = response.text.strip()
+                if raw_text == "-1":
+                    raise ValueError(
+                        f"ThingSpeak отклонил доступ к каналу {channel_id}. "
+                        "Для приватного канала нужен read api_key."
+                    )
+
+                try:
+                    data = response.json()
+                except JSONDecodeError as exc:
+                    preview = raw_text[:200].replace("\n", " ").replace("\r", " ")
+                    raise ValueError(
+                        f"ThingSpeak вернул не JSON для канала {channel_id} по адресу {url}: {preview!r}"
+                    ) from exc
+
+                if not isinstance(data, dict):
+                    raise ValueError(
+                        f"ThingSpeak вернул неожиданный формат данных для канала {channel_id}"
+                    )
+                feeds = data.get("feeds")
+                if not isinstance(feeds, list):
+                    raise ValueError(
+                        f"ThingSpeak вернул некорректное поле feeds для канала {channel_id}"
+                    )
+
+                logger.debug(
+                    "ThingSpeak: канал %s успешно прочитан через %s, записей=%s",
+                    channel_id,
+                    url,
+                    len(feeds),
+                )
+                return data
+            except (requests.RequestException, ValueError) as exc:
+                logger.warning(
+                    "Не удалось прочитать канал %s через %s: %s",
+                    channel_id,
+                    url,
+                    exc,
+                )
+                errors.append(f"{url}: {exc}")
+
+        raise RuntimeError(
+            f"Не удалось получить данные ThingSpeak для канала {channel_id}. "
+            f"Проверены адреса: {'; '.join(errors)}"
         )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            raise ValueError("ThingSpeak вернул неожиданный формат данных")
-        return data
 
 
 class DestinationDispatcher:
@@ -177,6 +235,7 @@ def parse_float(value: Any) -> float | None:
     return parsed
 
 
+
 def sanitize_number(value: Any) -> float | int | None:
     if value is None:
         return None
@@ -187,6 +246,7 @@ def sanitize_number(value: Any) -> float | int | None:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     return value
+
 
 
 def sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
