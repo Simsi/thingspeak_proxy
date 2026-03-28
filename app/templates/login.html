@@ -8,11 +8,14 @@
 </head>
 <body class="login-body">
   <main class="login-card">
+    <div class="eyebrow">ThingSpeak Monitor</div>
     <h1>Авторизация</h1>
-    <p class="muted">Вход в мониторинг устройств и конечных серверов.</p>
+    <p class="login-subtitle">Безопасный вход в веб-интерфейс мониторинга устройств и конечных серверов.</p>
+
     {% if error %}
       <div class="alert alert-error">{{ error }}</div>
     {% endif %}
+
     <form method="post" class="login-form" autocomplete="off">
       <label>
         <span>Логин</span>

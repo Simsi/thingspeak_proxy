@@ -7,113 +7,244 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body>
-  <header class="topbar">
-    <div>
-      <h1>Мониторинг</h1>
-      <p class="muted">Пользователь: {{ username }}</p>
-    </div>
-    <div class="topbar-actions">
-      <div class="status-box">
-        <div>Последний опрос: {{ runtime_status.last_poll_at or 'ещё не выполнялся' }}</div>
-        <div>Последний успех: {{ runtime_status.last_success_at or 'ещё не выполнялся' }}</div>
-        <div>Последняя ошибка: {{ runtime_status.last_error or 'нет' }}</div>
+<body class="app-body monitor-body">
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand-block">
+        <div class="eyebrow">ThingSpeak Monitor</div>
+        <h1>Центр мониторинга</h1>
+        <div class="header-meta muted">Пользователь: {{ username }}</div>
       </div>
-      <form method="post" action="{{ url_for('web.logout') }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="secondary-button">Выйти</button>
-      </form>
-    </div>
-  </header>
 
-  <main class="monitor-grid" id="monitor-app">
-    <section class="charts-panel">
-      <div class="device-select-row">
-        <label for="device-select">Выбрать устройство</label>
-        <select id="device-select"></select>
-        <div id="device-meta" class="device-meta"></div>
-      </div>
-      <div id="message-box"></div>
-      <div class="charts-grid">
-        <div class="chart-card">
-          <div class="chart-title">Тепловой поток</div>
-          <svg id="chart-warm-stream" class="chart-svg" viewBox="0 0 500 240"></svg>
-        </div>
-        <div class="chart-card">
-          <div class="chart-title">Температура поверхности</div>
-          <svg id="chart-surface-temp" class="chart-svg" viewBox="0 0 500 240"></svg>
-        </div>
-        <div class="chart-card">
-          <div class="chart-title">Температура воздуха</div>
-          <svg id="chart-air-temp" class="chart-svg" viewBox="0 0 500 240"></svg>
-        </div>
-        <div class="chart-card">
-          <div class="chart-title">Влажность воздуха</div>
-          <svg id="chart-air-hum" class="chart-svg" viewBox="0 0 500 240"></svg>
-        </div>
-      </div>
-    </section>
+      <div class="header-center">
+        <label class="select-card" for="device-select">
+          <span class="select-card-label">Активное устройство</span>
+          <select id="device-select"></select>
+          <span id="device-meta" class="select-card-meta"></span>
+        </label>
 
-    <aside class="side-panel">
-      <section class="table-card">
-        <div class="table-header">Настроенные устройства</div>
-        <table id="devices-table">
-          <thead>
-            <tr>
-              <th>dev name</th>
-              <th>dev thingspeak url</th>
-              <th>device hash</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for item in devices %}
-            <tr>
-              <td><input data-field="name" value="{{ item.name }}"></td>
-              <td><input data-field="thingspeak_url" value="{{ item.thingspeak_url }}"></td>
-              <td><input data-field="device_hash" value="{{ item.device_hash }}" readonly></td>
-              <td><button type="button" class="danger-inline" data-action="delete-row">Удалить</button></td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        <div class="table-actions">
-          <button type="button" id="add-device" class="secondary-button">Добавить</button>
-          <button type="button" id="save-devices" class="primary-button">Сохранить</button>
+        <div class="status-strip">
+          <div class="status-pill">
+            <span class="status-pill-label">Последний опрос</span>
+            <strong id="status-last-poll">{{ runtime_status.last_poll_at or '—' }}</strong>
+          </div>
+          <div class="status-pill">
+            <span class="status-pill-label">Последний успех</span>
+            <strong id="status-last-success">{{ runtime_status.last_success_at or '—' }}</strong>
+          </div>
+          <div class="status-pill status-pill-wide">
+            <span class="status-pill-label">Последняя ошибка</span>
+            <strong id="status-last-error">{{ runtime_status.last_error or 'нет' }}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="hint-card">
+          <div class="hint-title">Навигация по графикам</div>
+          <div class="hint-text">Колесо — масштаб по времени, Shift+колесо — масштаб по Y, перетаскивание — сдвиг, двойной клик — сброс.</div>
+        </div>
+        <form method="post" action="{{ url_for('web.logout') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="ghost-button">Выйти</button>
+        </form>
+      </div>
+    </header>
+
+    <main class="workspace" id="monitor-app">
+      <section class="visual-zone">
+        <div id="message-box" class="message-stack"></div>
+
+        <div class="charts-grid">
+          <article class="chart-card" data-field="warm_stream">
+            <div class="chart-card-head">
+              <div>
+                <h2>Тепловой поток</h2>
+                <p>Интерактивный график · Вт/м²</p>
+              </div>
+              <div class="chart-actions">
+                <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
+                <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
+              </div>
+            </div>
+            <div class="chart-stage">
+              <canvas id="chart-warm-stream" class="chart-canvas"></canvas>
+              <div class="chart-empty" hidden>Нет данных для отображения</div>
+              <div class="chart-tooltip" hidden></div>
+            </div>
+            <div class="chart-footer">
+              <div class="metric-box">
+                <span class="metric-label">Последнее</span>
+                <strong data-field-last="warm_stream">—</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Диапазон</span>
+                <strong data-field-range="warm_stream">—</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="chart-card" data-field="surface_temp">
+            <div class="chart-card-head">
+              <div>
+                <h2>Температура поверхности</h2>
+                <p>Интерактивный график · °C</p>
+              </div>
+              <div class="chart-actions">
+                <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
+                <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
+              </div>
+            </div>
+            <div class="chart-stage">
+              <canvas id="chart-surface-temp" class="chart-canvas"></canvas>
+              <div class="chart-empty" hidden>Нет данных для отображения</div>
+              <div class="chart-tooltip" hidden></div>
+            </div>
+            <div class="chart-footer">
+              <div class="metric-box">
+                <span class="metric-label">Последнее</span>
+                <strong data-field-last="surface_temp">—</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Диапазон</span>
+                <strong data-field-range="surface_temp">—</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="chart-card" data-field="air_temp">
+            <div class="chart-card-head">
+              <div>
+                <h2>Температура воздуха</h2>
+                <p>Интерактивный график · °C</p>
+              </div>
+              <div class="chart-actions">
+                <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
+                <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
+              </div>
+            </div>
+            <div class="chart-stage">
+              <canvas id="chart-air-temp" class="chart-canvas"></canvas>
+              <div class="chart-empty" hidden>Нет данных для отображения</div>
+              <div class="chart-tooltip" hidden></div>
+            </div>
+            <div class="chart-footer">
+              <div class="metric-box">
+                <span class="metric-label">Последнее</span>
+                <strong data-field-last="air_temp">—</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Диапазон</span>
+                <strong data-field-range="air_temp">—</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="chart-card" data-field="air_hum">
+            <div class="chart-card-head">
+              <div>
+                <h2>Влажность воздуха</h2>
+                <p>Интерактивный график · %</p>
+              </div>
+              <div class="chart-actions">
+                <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
+                <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
+              </div>
+            </div>
+            <div class="chart-stage">
+              <canvas id="chart-air-hum" class="chart-canvas"></canvas>
+              <div class="chart-empty" hidden>Нет данных для отображения</div>
+              <div class="chart-tooltip" hidden></div>
+            </div>
+            <div class="chart-footer">
+              <div class="metric-box">
+                <span class="metric-label">Последнее</span>
+                <strong data-field-last="air_hum">—</strong>
+              </div>
+              <div class="metric-box">
+                <span class="metric-label">Диапазон</span>
+                <strong data-field-range="air_hum">—</strong>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 
-      <section class="table-card">
-        <div class="table-header">Конечные серверы</div>
-        <table id="destinations-table">
-          <thead>
-            <tr>
-              <th>dest name</th>
-              <th>dest ip/host</th>
-              <th>port</th>
-              <th>data destination url</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for item in destinations %}
-            <tr>
-              <td><input data-field="name" value="{{ item.name }}"></td>
-              <td><input data-field="host" value="{{ item.host }}"></td>
-              <td><input data-field="port" value="{{ item.port }}"></td>
-              <td><input data-field="path" value="{{ item.path }}"></td>
-              <td><button type="button" class="danger-inline" data-action="delete-row">Удалить</button></td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        <div class="table-actions">
-          <button type="button" id="add-destination" class="secondary-button">Добавить</button>
-          <button type="button" id="save-destinations" class="primary-button">Сохранить</button>
-        </div>
-      </section>
-    </aside>
-  </main>
+      <aside class="sidebar">
+        <section class="data-card">
+          <div class="data-card-head">
+            <div>
+              <h3>Устройства</h3>
+              <p>Имя и ссылка ThingSpeak</p>
+            </div>
+            <div class="data-card-actions">
+              <button type="button" id="add-device" class="chip-button">Добавить</button>
+              <button type="button" id="save-devices" class="primary-button compact-button">Сохранить</button>
+            </div>
+          </div>
+          <div class="table-shell">
+            <table id="devices-table">
+              <thead>
+                <tr>
+                  <th>Имя</th>
+                  <th>ThingSpeak URL</th>
+                  <th>Hash</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in devices %}
+                <tr>
+                  <td><input data-field="name" value="{{ item.name }}"></td>
+                  <td><input data-field="thingspeak_url" value="{{ item.thingspeak_url }}"></td>
+                  <td><input data-field="device_hash" value="{{ item.device_hash }}" readonly></td>
+                  <td><button type="button" class="danger-inline" data-action="delete-row">×</button></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="data-card">
+          <div class="data-card-head">
+            <div>
+              <h3>Конечные серверы</h3>
+              <p>Список POST-приёмников</p>
+            </div>
+            <div class="data-card-actions">
+              <button type="button" id="add-destination" class="chip-button">Добавить</button>
+              <button type="button" id="save-destinations" class="primary-button compact-button">Сохранить</button>
+            </div>
+          </div>
+          <div class="table-shell">
+            <table id="destinations-table">
+              <thead>
+                <tr>
+                  <th>Имя</th>
+                  <th>Host</th>
+                  <th>Port</th>
+                  <th>Path</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in destinations %}
+                <tr>
+                  <td><input data-field="name" value="{{ item.name }}"></td>
+                  <td><input data-field="host" value="{{ item.host }}"></td>
+                  <td><input data-field="port" value="{{ item.port }}"></td>
+                  <td><input data-field="path" value="{{ item.path }}"></td>
+                  <td><button type="button" class="danger-inline" data-action="delete-row">×</button></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
 
   <script>
     window.APP_BOOTSTRAP = {{ {
