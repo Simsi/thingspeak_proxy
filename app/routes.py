@@ -19,6 +19,7 @@ from flask import (
 from werkzeug.security import check_password_hash
 
 from .memory_store import MemoryValidationError
+from .services import sanitize_number
 
 bp = Blueprint("web", __name__)
 
@@ -160,10 +161,10 @@ def measurements() -> Response:
                     "event_id": row.event_id,
                     "device_name": row.device_name,
                     "device_hash": row.device_hash,
-                    "air_temp": row.air_temp,
-                    "air_hum": row.air_hum,
-                    "warm_stream": row.warm_stream,
-                    "surface_temp": row.surface_temp,
+                    "air_temp": sanitize_number(row.air_temp),
+                    "air_hum": sanitize_number(row.air_hum),
+                    "warm_stream": sanitize_number(row.warm_stream),
+                    "surface_temp": sanitize_number(row.surface_temp),
                     "source_created_at": row.source_created_at.isoformat() if row.source_created_at else None,
                     "inserted_at": row.inserted_at.isoformat() if row.inserted_at else None,
                 }
@@ -186,6 +187,12 @@ def replace_devices() -> Response:
         return jsonify({"ok": False, "error": str(exc)}), 403
     except MemoryValidationError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError as exc:
+        current_app.logger.exception("Ошибка сохранения memory.json")
+        return jsonify({"ok": False, "error": f"Не удалось сохранить memory.json: {exc}"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Неожиданная ошибка при сохранении списка устройств")
+        return jsonify({"ok": False, "error": f"Не удалось сохранить список устройств: {exc}"}), 500
 
 
 @bp.post("/api/destinations/replace")
@@ -201,3 +208,9 @@ def replace_destinations() -> Response:
         return jsonify({"ok": False, "error": str(exc)}), 403
     except MemoryValidationError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError as exc:
+        current_app.logger.exception("Ошибка сохранения memory.json")
+        return jsonify({"ok": False, "error": f"Не удалось сохранить memory.json: {exc}"}), 500
+    except Exception as exc:
+        current_app.logger.exception("Неожиданная ошибка при сохранении списка конечных серверов")
+        return jsonify({"ok": False, "error": f"Не удалось сохранить список конечных серверов: {exc}"}), 500

@@ -20,18 +20,33 @@
     }, 4500);
   }
 
+  async function readJsonResponse(response) {
+    const rawText = await response.text();
+    let payload = {};
+    if (rawText) {
+      try {
+        payload = JSON.parse(rawText);
+      } catch (error) {
+        const preview = rawText.slice(0, 220).replace(/\s+/g, ' ').trim();
+        throw new Error(`Сервер вернул невалидный JSON: ${preview || 'пустой ответ'}`);
+      }
+    }
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    return payload;
+  }
+
   function requestJson(url, options = {}) {
     const headers = Object.assign({}, options.headers || {}, {
       'Content-Type': 'application/json',
       'X-CSRF-Token': csrfToken,
     });
-    return fetch(url, Object.assign({}, options, { headers })).then(async (response) => {
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload.ok === false) {
-        throw new Error(payload.error || `HTTP ${response.status}`);
-      }
-      return payload;
-    });
+    return fetch(url, Object.assign({}, options, {
+      headers,
+      cache: 'no-store',
+      credentials: options.credentials || 'same-origin',
+    })).then(readJsonResponse);
   }
 
   function buildInputCell(field, value = '', readonly = false) {
@@ -177,8 +192,9 @@
       return;
     }
     try {
-      const url = `${app.measurements_url}?device_name=${encodeURIComponent(deviceName)}`;
-      const payload = await fetch(url, { credentials: 'same-origin' }).then((response) => response.json());
+      const separator = app.measurements_url.includes('?') ? '&' : '?';
+      const url = `${app.measurements_url}?device_name=${encodeURIComponent(deviceName)}${separator}_ts=${Date.now()}`;
+      const payload = await fetch(url, { credentials: 'same-origin', cache: 'no-store' }).then(readJsonResponse);
       if (!payload.ok) {
         throw new Error(payload.error || 'Не удалось загрузить измерения');
       }
@@ -244,4 +260,13 @@
 
   refreshDeviceSelect(app.devices || [], app.devices?.[0]?.name || '');
   loadMeasurements(deviceSelect.value);
+
+  const refreshIntervalMs = Number(app.refresh_interval_ms || 15000);
+  if (Number.isFinite(refreshIntervalMs) && refreshIntervalMs >= 3000) {
+    window.setInterval(() => {
+      if (deviceSelect && deviceSelect.value) {
+        loadMeasurements(deviceSelect.value);
+      }
+    }, refreshIntervalMs);
+  }
 })();

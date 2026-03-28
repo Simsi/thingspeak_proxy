@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 import threading
 from copy import deepcopy
 from pathlib import Path
@@ -144,14 +143,15 @@ class MemoryStore:
     def _write(self) -> None:
         target_dir = self.path.parent
         os.makedirs(target_dir, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(prefix="memory_", suffix=".json", dir=str(target_dir))
+
+        serialized = json.dumps(self.data, ensure_ascii=False, indent=2) + "\n"
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(self.data, fh, ensure_ascii=False, indent=2)
-            os.replace(temp_path, self.path)
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+            with self.path.open("w", encoding="utf-8") as fh:
+                fh.write(serialized)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError as exc:
+            raise OSError(f"ошибка записи файла {self.path}: {exc}") from exc
 
     @staticmethod
     def extract_channel_id(thingspeak_url: str) -> str:

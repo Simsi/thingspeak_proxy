@@ -122,7 +122,8 @@
       'bootstrap_url': url_for('web.bootstrap'),
       'measurements_url': url_for('web.measurements'),
       'replace_devices_url': url_for('web.replace_devices'),
-      'replace_destinations_url': url_for('web.replace_destinations')
+      'replace_destinations_url': url_for('web.replace_destinations'),
+      'refresh_interval_ms': 15000
     } | tojson }};
   </script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>

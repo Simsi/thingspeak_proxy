@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,8 +48,9 @@ class DestinationDispatcher:
         self.executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="destination-sender")
 
     def dispatch(self, destinations: list[dict[str, Any]], payload: dict[str, Any]) -> None:
+        safe_payload = sanitize_payload(payload)
         for destination in destinations:
-            self.executor.submit(self._send, destination, payload.copy())
+            self.executor.submit(self._send, destination, safe_payload.copy())
 
     @staticmethod
     def _send(destination: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -168,9 +169,28 @@ def parse_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def sanitize_number(value: Any) -> float | int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
+
+
+def sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: sanitize_number(value) for key, value in payload.items()}
 
 
 
