@@ -5,184 +5,154 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Мониторинг | ThingSpeak Monitor</title>
   <meta name="csrf-token" content="{{ csrf_token }}">
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('ts-monitor-theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', saved);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body class="app-body monitor-body">
-  <div class="app-shell">
-    <header class="app-header">
-      <div class="brand-block">
-        <div class="eyebrow">ThingSpeak Monitor</div>
-        <h1>Центр мониторинга</h1>
-        <div class="header-meta muted">Пользователь: {{ username }}</div>
+<body class="monitor-page">
+  <div class="app-frame">
+    <header class="topbar">
+      <div class="topbar__brand">
+        <span class="brand-kicker">ThingSpeak Monitor</span>
+        <strong>Мониторинг</strong>
       </div>
 
-      <div class="header-center">
-        <label class="select-card" for="device-select">
-          <span class="select-card-label">Активное устройство</span>
+      <div class="device-bar">
+        <label class="device-picker" for="device-select">
+          <span class="field-caption">Устройство</span>
           <select id="device-select"></select>
-          <span id="device-meta" class="select-card-meta"></span>
         </label>
-
-        <div class="status-strip">
-          <div class="status-pill">
-            <span class="status-pill-label">Последний опрос</span>
-            <strong id="status-last-poll">{{ runtime_status.last_poll_at or '—' }}</strong>
-          </div>
-          <div class="status-pill">
-            <span class="status-pill-label">Последний успех</span>
-            <strong id="status-last-success">{{ runtime_status.last_success_at or '—' }}</strong>
-          </div>
-          <div class="status-pill status-pill-wide">
-            <span class="status-pill-label">Последняя ошибка</span>
-            <strong id="status-last-error">{{ runtime_status.last_error or 'нет' }}</strong>
-          </div>
-        </div>
+        <div id="device-meta" class="device-meta"></div>
       </div>
 
-      <div class="header-actions">
-        <div class="hint-card">
-          <div class="hint-title">Навигация по графикам</div>
-          <div class="hint-text">Колесо — масштаб по времени, Shift+колесо — масштаб по Y, перетаскивание — сдвиг, двойной клик — сброс.</div>
+      <div class="topbar__actions">
+        <div class="theme-switch" role="group" aria-label="Тема интерфейса">
+          <button type="button" class="theme-switch__button" data-theme-value="light">Светлая</button>
+          <button type="button" class="theme-switch__button" data-theme-value="dark">Тёмная</button>
         </div>
         <form method="post" action="{{ url_for('web.logout') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button type="submit" class="ghost-button">Выйти</button>
+          <button type="submit" class="secondary-button">Выйти</button>
         </form>
       </div>
     </header>
 
-    <main class="workspace" id="monitor-app">
-      <section class="visual-zone">
+    <main class="layout">
+      <section class="charts-panel">
         <div id="message-box" class="message-stack"></div>
 
         <div class="charts-grid">
           <article class="chart-card" data-field="warm_stream">
-            <div class="chart-card-head">
+            <div class="chart-card__header">
               <div>
                 <h2>Тепловой поток</h2>
-                <p>Интерактивный график · Вт/м²</p>
+                <p>Вт/м²</p>
               </div>
-              <div class="chart-actions">
+              <div class="chart-tools">
                 <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
                 <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
               </div>
             </div>
             <div class="chart-stage">
               <canvas id="chart-warm-stream" class="chart-canvas"></canvas>
-              <div class="chart-empty" hidden>Нет данных для отображения</div>
+              <div class="chart-empty" hidden>Нет данных</div>
               <div class="chart-tooltip" hidden></div>
             </div>
-            <div class="chart-footer">
-              <div class="metric-box">
-                <span class="metric-label">Последнее</span>
-                <strong data-field-last="warm_stream">—</strong>
-              </div>
-              <div class="metric-box">
-                <span class="metric-label">Диапазон</span>
-                <strong data-field-range="warm_stream">—</strong>
-              </div>
+            <div class="chart-meta">
+              <span data-field-last="warm_stream">—</span>
+              <span data-field-range="warm_stream">—</span>
             </div>
           </article>
 
           <article class="chart-card" data-field="surface_temp">
-            <div class="chart-card-head">
+            <div class="chart-card__header">
               <div>
                 <h2>Температура поверхности</h2>
-                <p>Интерактивный график · °C</p>
+                <p>°C</p>
               </div>
-              <div class="chart-actions">
+              <div class="chart-tools">
                 <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
                 <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
               </div>
             </div>
             <div class="chart-stage">
               <canvas id="chart-surface-temp" class="chart-canvas"></canvas>
-              <div class="chart-empty" hidden>Нет данных для отображения</div>
+              <div class="chart-empty" hidden>Нет данных</div>
               <div class="chart-tooltip" hidden></div>
             </div>
-            <div class="chart-footer">
-              <div class="metric-box">
-                <span class="metric-label">Последнее</span>
-                <strong data-field-last="surface_temp">—</strong>
-              </div>
-              <div class="metric-box">
-                <span class="metric-label">Диапазон</span>
-                <strong data-field-range="surface_temp">—</strong>
-              </div>
+            <div class="chart-meta">
+              <span data-field-last="surface_temp">—</span>
+              <span data-field-range="surface_temp">—</span>
             </div>
           </article>
 
           <article class="chart-card" data-field="air_temp">
-            <div class="chart-card-head">
+            <div class="chart-card__header">
               <div>
                 <h2>Температура воздуха</h2>
-                <p>Интерактивный график · °C</p>
+                <p>°C</p>
               </div>
-              <div class="chart-actions">
+              <div class="chart-tools">
                 <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
                 <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
               </div>
             </div>
             <div class="chart-stage">
               <canvas id="chart-air-temp" class="chart-canvas"></canvas>
-              <div class="chart-empty" hidden>Нет данных для отображения</div>
+              <div class="chart-empty" hidden>Нет данных</div>
               <div class="chart-tooltip" hidden></div>
             </div>
-            <div class="chart-footer">
-              <div class="metric-box">
-                <span class="metric-label">Последнее</span>
-                <strong data-field-last="air_temp">—</strong>
-              </div>
-              <div class="metric-box">
-                <span class="metric-label">Диапазон</span>
-                <strong data-field-range="air_temp">—</strong>
-              </div>
+            <div class="chart-meta">
+              <span data-field-last="air_temp">—</span>
+              <span data-field-range="air_temp">—</span>
             </div>
           </article>
 
           <article class="chart-card" data-field="air_hum">
-            <div class="chart-card-head">
+            <div class="chart-card__header">
               <div>
                 <h2>Влажность воздуха</h2>
-                <p>Интерактивный график · %</p>
+                <p>%</p>
               </div>
-              <div class="chart-actions">
+              <div class="chart-tools">
                 <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
                 <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
               </div>
             </div>
             <div class="chart-stage">
               <canvas id="chart-air-hum" class="chart-canvas"></canvas>
-              <div class="chart-empty" hidden>Нет данных для отображения</div>
+              <div class="chart-empty" hidden>Нет данных</div>
               <div class="chart-tooltip" hidden></div>
             </div>
-            <div class="chart-footer">
-              <div class="metric-box">
-                <span class="metric-label">Последнее</span>
-                <strong data-field-last="air_hum">—</strong>
-              </div>
-              <div class="metric-box">
-                <span class="metric-label">Диапазон</span>
-                <strong data-field-range="air_hum">—</strong>
-              </div>
+            <div class="chart-meta">
+              <span data-field-last="air_hum">—</span>
+              <span data-field-range="air_hum">—</span>
             </div>
           </article>
         </div>
       </section>
 
-      <aside class="sidebar">
+      <aside class="side-panel">
         <section class="data-card">
-          <div class="data-card-head">
+          <div class="data-card__header">
             <div>
               <h3>Устройства</h3>
               <p>Имя и ссылка ThingSpeak</p>
             </div>
-            <div class="data-card-actions">
+            <div class="data-card__actions">
               <button type="button" id="add-device" class="chip-button">Добавить</button>
-              <button type="button" id="save-devices" class="primary-button compact-button">Сохранить</button>
+              <button type="button" id="save-devices" class="primary-button">Сохранить</button>
             </div>
           </div>
-          <div class="table-shell">
+          <div class="table-shell compact-table-shell">
             <table id="devices-table">
               <thead>
                 <tr>
@@ -207,17 +177,17 @@
         </section>
 
         <section class="data-card">
-          <div class="data-card-head">
+          <div class="data-card__header">
             <div>
               <h3>Конечные серверы</h3>
               <p>Список POST-приёмников</p>
             </div>
-            <div class="data-card-actions">
+            <div class="data-card__actions">
               <button type="button" id="add-destination" class="chip-button">Добавить</button>
-              <button type="button" id="save-destinations" class="primary-button compact-button">Сохранить</button>
+              <button type="button" id="save-destinations" class="primary-button">Сохранить</button>
             </div>
           </div>
-          <div class="table-shell">
+          <div class="table-shell compact-table-shell">
             <table id="destinations-table">
               <thead>
                 <tr>

@@ -4,13 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Вход | ThingSpeak Monitor</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('ts-monitor-theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', saved);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  </script>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body class="login-body">
+<body class="login-page">
   <main class="login-card">
-    <div class="eyebrow">ThingSpeak Monitor</div>
-    <h1>Авторизация</h1>
-    <p class="login-subtitle">Безопасный вход в веб-интерфейс мониторинга устройств и конечных серверов.</p>
+    <div class="login-card__top">
+      <span class="brand-kicker">ThingSpeak Monitor</span>
+      <div class="theme-switch" role="group" aria-label="Тема интерфейса">
+        <button type="button" class="theme-switch__button" data-theme-value="light">Светлая</button>
+        <button type="button" class="theme-switch__button" data-theme-value="dark">Тёмная</button>
+      </div>
+    </div>
+    <h1>Вход в систему</h1>
+    <p class="login-subtitle">Простой и защищённый доступ к панели мониторинга.</p>
 
     {% if error %}
       <div class="alert alert-error">{{ error }}</div>
@@ -25,8 +41,24 @@
         <span>Пароль</span>
         <input type="password" name="password" required>
       </label>
-      <button type="submit" class="primary-button">Войти</button>
+      <button type="submit" class="primary-button login-submit">Войти</button>
     </form>
   </main>
+  <script>
+    (function () {
+      var buttons = document.querySelectorAll('.theme-switch__button');
+      function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        try { localStorage.setItem('ts-monitor-theme', theme); } catch (e) {}
+        buttons.forEach(function (btn) {
+          btn.setAttribute('aria-pressed', String(btn.dataset.themeValue === theme));
+        });
+      }
+      buttons.forEach(function (btn) {
+        btn.addEventListener('click', function () { setTheme(btn.dataset.themeValue); });
+      });
+      setTheme(document.documentElement.getAttribute('data-theme') || 'dark');
+    })();
+  </script>
 </body>
 </html>

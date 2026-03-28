@@ -1,5 +1,7 @@
 (() => {
   const app = window.APP_BOOTSTRAP || {};
+  if (!app.measurements_url) return;
+
   const csrfToken = app.csrf_token;
   const refreshIntervalMs = Number(app.refresh_interval_ms || 15000);
 
@@ -9,16 +11,14 @@
     deviceMeta: document.getElementById('device-meta'),
     devicesTable: document.getElementById('devices-table'),
     destinationsTable: document.getElementById('destinations-table'),
-    lastPoll: document.getElementById('status-last-poll'),
-    lastSuccess: document.getElementById('status-last-success'),
-    lastError: document.getElementById('status-last-error'),
+    themeButtons: Array.from(document.querySelectorAll('[data-theme-value]')),
   };
 
   const chartConfigs = [
-    { fieldName: 'warm_stream', canvasId: 'chart-warm-stream', label: 'Тепловой поток', unit: 'Вт/м²', color: '#63d3ff' },
-    { fieldName: 'surface_temp', canvasId: 'chart-surface-temp', label: 'Температура поверхности', unit: '°C', color: '#7cf0d7' },
-    { fieldName: 'air_temp', canvasId: 'chart-air-temp', label: 'Температура воздуха', unit: '°C', color: '#8db9ff' },
-    { fieldName: 'air_hum', canvasId: 'chart-air-hum', label: 'Влажность воздуха', unit: '%', color: '#8de78d' },
+    { fieldName: 'warm_stream', canvasId: 'chart-warm-stream', label: 'Тепловой поток', unit: 'Вт/м²', colorVar: '--chart-warm' },
+    { fieldName: 'surface_temp', canvasId: 'chart-surface-temp', label: 'Температура поверхности', unit: '°C', colorVar: '--chart-surface' },
+    { fieldName: 'air_temp', canvasId: 'chart-air-temp', label: 'Температура воздуха', unit: '°C', colorVar: '--chart-air-temp' },
+    { fieldName: 'air_hum', canvasId: 'chart-air-hum', label: 'Влажность воздуха', unit: '%', colorVar: '--chart-air-hum' },
   ];
 
   const state = {
@@ -28,16 +28,17 @@
     measurements: [],
     lastLoadedDeviceHash: null,
     autoRefreshHandle: null,
+    theme: readInitialTheme(),
   };
 
-  const formatDateTime = new Intl.DateTimeFormat('ru-RU', {
+  const formatAxisDate = new Intl.DateTimeFormat('ru-RU', {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
   });
 
-  const formatDateTimeLong = new Intl.DateTimeFormat('ru-RU', {
+  const formatTooltipDate = new Intl.DateTimeFormat('ru-RU', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -46,12 +47,38 @@
     second: '2-digit',
   });
 
+  function readInitialTheme() {
+    try {
+      return localStorage.getItem('ts-monitor-theme') || document.documentElement.getAttribute('data-theme') || 'dark';
+    } catch (error) {
+      return document.documentElement.getAttribute('data-theme') || 'dark';
+    }
+  }
+
+  function applyTheme(theme) {
+    state.theme = theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('ts-monitor-theme', theme);
+    } catch (error) {
+      // ignore
+    }
+    refs.themeButtons.forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.dataset.themeValue === theme));
+    });
+    Object.values(charts).forEach((chart) => chart.draw());
+  }
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
   class InteractiveChart {
     constructor(config) {
       this.fieldName = config.fieldName;
       this.label = config.label;
       this.unit = config.unit;
-      this.color = config.color;
+      this.colorVar = config.colorVar;
       this.canvas = document.getElementById(config.canvasId);
       this.card = this.canvas.closest('.chart-card');
       this.stage = this.canvas.closest('.chart-stage');
@@ -94,14 +121,16 @@
       this.resize();
     }
 
+    get color() {
+      return cssVar(this.colorVar) || '#7bbfff';
+    }
+
     setData(items) {
       const fallbackBase = Date.now();
       const normalized = [];
       items.forEach((item, index) => {
         const value = toFiniteNumber(item[this.fieldName]);
-        if (value === null) {
-          return;
-        }
+        if (value === null) return;
         const ts = parseTimestamp(item.source_created_at) ?? parseTimestamp(item.inserted_at) ?? (fallbackBase + index * 1000);
         normalized.push({
           x: ts,
@@ -122,13 +151,11 @@
         : null;
 
       const shouldReset = !this.viewX || state.lastLoadedDeviceHash !== state.selectedDeviceHash;
-      if (shouldReset) {
-        this.resetView(false);
-      } else {
-        this.viewX = clampXView(this.viewX, this.fullXRange);
-        this.draw();
-      }
+      if (shouldReset) this.resetView(false);
+      else this.viewX = clampXView(this.viewX, this.fullXRange);
+
       this.updateSummary();
+      this.draw();
     }
 
     resetView(drawNow = true) {
@@ -141,11 +168,7 @@
       }
       const min = this.fullXRange.min;
       const max = this.fullXRange.max;
-      const same = min === max;
-      this.viewX = {
-        min: same ? min - 60_000 : min,
-        max: same ? max + 60_000 : max,
-      };
+      this.viewX = min === max ? { min: min - 60_000, max: max + 60_000 } : { min, max };
       if (drawNow) this.draw();
     }
 
@@ -166,10 +189,10 @@
       const width = this.lastRect ? this.lastRect.width : this.stage.clientWidth;
       const height = this.lastRect ? this.lastRect.height : this.stage.clientHeight;
       return {
-        x: 58,
-        y: 18,
-        width: Math.max(10, width - 78),
-        height: Math.max(10, height - 52),
+        x: 54,
+        y: 12,
+        width: Math.max(10, width - 68),
+        height: Math.max(10, height - 42),
       };
     }
 
@@ -183,10 +206,7 @@
     getYRange(visibleData) {
       const source = visibleData.length ? visibleData : this.data;
       if (!source.length) return null;
-
-      if (this.manualY) {
-        return { min: this.manualY.min, max: this.manualY.max };
-      }
+      if (this.manualY) return { min: this.manualY.min, max: this.manualY.max };
 
       let min = source[0].y;
       let max = source[0].y;
@@ -199,8 +219,7 @@
         const pad = Math.max(Math.abs(min) * 0.05, 0.5);
         return { min: min - pad, max: max + pad };
       }
-
-      const pad = (max - min) * 0.12;
+      const pad = (max - min) * 0.1;
       return { min: min - pad, max: max + pad };
     }
 
@@ -213,7 +232,7 @@
       if (!this.data.length || !this.viewX) {
         this.emptyEl.hidden = false;
         this.hideTooltip();
-        this.drawChrome(null, null, []);
+        this.drawChrome(null, null);
         return;
       }
 
@@ -222,10 +241,8 @@
       const visibleData = this.getVisibleData();
       this.filteredData = visibleData;
       const yRange = this.getYRange(visibleData);
-      this.drawChrome(plot, yRange, visibleData);
-      if (!visibleData.length || !yRange) {
-        return;
-      }
+      this.drawChrome(plot, yRange);
+      if (!visibleData.length || !yRange) return;
 
       const xScale = (value) => plot.x + ((value - this.viewX.min) / (this.viewX.max - this.viewX.min)) * plot.width;
       const yScale = (value) => plot.y + plot.height - ((value - yRange.min) / (yRange.max - yRange.min)) * plot.height;
@@ -235,6 +252,10 @@
       ctx.rect(plot.x, plot.y, plot.width, plot.height);
       ctx.clip();
 
+      const fillGradient = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.height);
+      fillGradient.addColorStop(0, hexToRgba(this.color, 0.18));
+      fillGradient.addColorStop(1, hexToRgba(this.color, 0));
+
       ctx.beginPath();
       visibleData.forEach((point, index) => {
         const x = xScale(point.x);
@@ -242,18 +263,25 @@
         if (index === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.strokeStyle = this.color;
-      ctx.shadowColor = this.color;
-      ctx.shadowBlur = 10;
       ctx.stroke();
-      ctx.shadowBlur = 0;
 
-      if (visibleData.length <= 400) {
+      if (visibleData.length > 1) {
+        const first = visibleData[0];
+        const last = visibleData[visibleData.length - 1];
+        ctx.lineTo(xScale(last.x), plot.y + plot.height);
+        ctx.lineTo(xScale(first.x), plot.y + plot.height);
+        ctx.closePath();
+        ctx.fillStyle = fillGradient;
+        ctx.fill();
+      }
+
+      if (visibleData.length <= 280) {
         ctx.fillStyle = this.color;
         visibleData.forEach((point) => {
           ctx.beginPath();
-          ctx.arc(xScale(point.x), yScale(point.y), 2.4, 0, Math.PI * 2);
+          ctx.arc(xScale(point.x), yScale(point.y), 2, 0, Math.PI * 2);
           ctx.fill();
         });
       }
@@ -262,18 +290,18 @@
         const p = this.hoveredPoint.point;
         const x = xScale(p.x);
         const y = yScale(p.y);
-        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.strokeStyle = cssVar('--chart-hover');
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, plot.y);
         ctx.lineTo(x, plot.y + plot.height);
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(x, y, 6.5, 0, Math.PI * 2);
+        ctx.arc(x, y, 5.5, 0, Math.PI * 2);
         ctx.strokeStyle = this.color;
         ctx.lineWidth = 2;
         ctx.stroke();
@@ -282,78 +310,56 @@
       ctx.restore();
     }
 
-    drawChrome(plot, yRange, visibleData) {
+    drawChrome(plot, yRange) {
       const ctx = this.ctx;
       const width = this.lastRect ? this.lastRect.width : this.stage.clientWidth;
       const height = this.lastRect ? this.lastRect.height : this.stage.clientHeight;
-      const gradient = ctx.createLinearGradient(0, 0, 0, height);
-      gradient.addColorStop(0, 'rgba(17, 35, 61, 0.52)');
-      gradient.addColorStop(1, 'rgba(6, 13, 24, 0.16)');
-      ctx.fillStyle = gradient;
+      const background = ctx.createLinearGradient(0, 0, 0, height);
+      background.addColorStop(0, cssVar('--chart-bg-top'));
+      background.addColorStop(1, cssVar('--chart-bg-bottom'));
+      ctx.fillStyle = background;
       ctx.fillRect(0, 0, width, height);
-
-      if (!plot) {
-        return;
-      }
+      if (!plot) return;
 
       ctx.save();
-      ctx.strokeStyle = 'rgba(148, 179, 224, 0.12)';
+      ctx.strokeStyle = cssVar('--chart-grid');
       ctx.lineWidth = 1;
-      for (let i = 0; i <= 4; i += 1) {
-        const y = plot.y + (plot.height / 4) * i;
+      for (let i = 0; i <= 3; i += 1) {
+        const y = plot.y + (plot.height / 3) * i;
         ctx.beginPath();
         ctx.moveTo(plot.x, y);
         ctx.lineTo(plot.x + plot.width, y);
         ctx.stroke();
       }
-      for (let i = 0; i <= 4; i += 1) {
-        const x = plot.x + (plot.width / 4) * i;
-        ctx.beginPath();
-        ctx.moveTo(x, plot.y);
-        ctx.lineTo(x, plot.y + plot.height);
-        ctx.stroke();
-      }
 
-      ctx.strokeStyle = 'rgba(160, 185, 220, 0.34)';
+      ctx.strokeStyle = cssVar('--chart-axis');
       ctx.beginPath();
       ctx.moveTo(plot.x, plot.y + plot.height);
       ctx.lineTo(plot.x + plot.width, plot.y + plot.height);
-      ctx.lineTo(plot.x + plot.width, plot.y);
       ctx.stroke();
 
-      ctx.fillStyle = 'rgba(173, 192, 222, 0.88)';
+      ctx.fillStyle = cssVar('--chart-label');
       ctx.font = '12px Inter, sans-serif';
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'right';
       if (yRange) {
-        for (let i = 0; i <= 4; i += 1) {
-          const value = yRange.max - ((yRange.max - yRange.min) / 4) * i;
-          const y = plot.y + (plot.height / 4) * i;
-          ctx.fillText(formatNumber(value), plot.x - 10, y);
-        }
+        const yTicks = buildYTicks(yRange, 3);
+        yTicks.forEach((value, index) => {
+          const y = plot.y + (plot.height / (yTicks.length - 1 || 1)) * index;
+          ctx.fillText(formatNumber(value), plot.x - 8, y);
+        });
       }
 
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      const xTicks = buildXTicks(this.viewX, 4);
-      xTicks.forEach((tick) => {
+      buildXTicks(this.viewX, 3).forEach((tick) => {
         const x = plot.x + ((tick - this.viewX.min) / (this.viewX.max - this.viewX.min)) * plot.width;
-        ctx.fillText(formatAxisTime(tick), x, plot.y + plot.height + 8);
+        ctx.fillText(formatAxisDate.format(new Date(tick)), x, plot.y + plot.height + 7);
       });
       ctx.restore();
 
-      if (visibleData.length) {
-        const lastPoint = visibleData[visibleData.length - 1];
-        ctx.save();
-        ctx.fillStyle = 'rgba(230, 238, 252, 0.72)';
-        ctx.font = '12px Inter, sans-serif';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'top';
-        ctx.fillText(`точек: ${visibleData.length}`, width - 12, 10);
-        ctx.restore();
-        if (!this.hoveredPoint) {
-          this.showPassiveTooltip(lastPoint);
-        }
+      if (!this.hoveredPoint && this.filteredData.length) {
+        this.showPassiveTooltip(this.filteredData[this.filteredData.length - 1]);
       }
     }
 
@@ -371,8 +377,8 @@
         if (point.y < min) min = point.y;
         if (point.y > max) max = point.y;
       });
-      this.lastEl.textContent = `${formatNumber(lastPoint.y)} ${this.unit}`;
-      this.rangeEl.textContent = `${formatNumber(min)} … ${formatNumber(max)}`;
+      this.lastEl.textContent = `Последнее: ${formatNumber(lastPoint.y)} ${this.unit}`;
+      this.rangeEl.textContent = `Диапазон: ${formatNumber(min)} … ${formatNumber(max)}`;
     }
 
     showPassiveTooltip(point) {
@@ -386,27 +392,19 @@
     }
 
     placeTooltip(point, x, y) {
-      if (!point) {
-        this.hideTooltip();
-        return;
-      }
+      if (!point) return this.hideTooltip();
       this.tooltipEl.hidden = false;
       this.tooltipEl.innerHTML = `
         <strong>${this.label}</strong>
-        <div>${formatDateTimeLong.format(new Date(point.x))}</div>
-        <div>Значение: ${formatNumber(point.y)} ${this.unit}</div>
-        <div>event_id: ${point.eventId ?? '—'}</div>
+        <div>${formatTooltipDate.format(new Date(point.x))}</div>
+        <div>${formatNumber(point.y)} ${this.unit}</div>
       `;
       const rect = this.stage.getBoundingClientRect();
       const tooltipRect = this.tooltipEl.getBoundingClientRect();
-      let left = x + 12;
-      let top = y - 14;
-      if (left + tooltipRect.width > rect.width - 8) {
-        left = x - tooltipRect.width - 12;
-      }
-      if (top + tooltipRect.height > rect.height - 8) {
-        top = rect.height - tooltipRect.height - 8;
-      }
+      let left = x + 10;
+      let top = y - 10;
+      if (left + tooltipRect.width > rect.width - 8) left = x - tooltipRect.width - 10;
+      if (top + tooltipRect.height > rect.height - 8) top = rect.height - tooltipRect.height - 8;
       if (top < 8) top = 8;
       if (left < 8) left = 8;
       this.tooltipEl.style.left = `${left}px`;
@@ -421,9 +419,7 @@
     screenToData(x, y) {
       if (!this.viewX) return null;
       const plot = this.getPlotRect();
-      if (x < plot.x || x > plot.x + plot.width || y < plot.y || y > plot.y + plot.height) {
-        return null;
-      }
+      if (x < plot.x || x > plot.x + plot.width || y < plot.y || y > plot.y + plot.height) return null;
       const yRange = this.getYRange(this.filteredData);
       if (!yRange) return null;
       return {
@@ -438,9 +434,7 @@
       const plot = this.getPlotRect();
       const localX = clientX - rect.left;
       const localY = clientY - rect.top;
-      if (localX < plot.x || localX > plot.x + plot.width || localY < plot.y || localY > plot.y + plot.height) {
-        return null;
-      }
+      if (localX < plot.x || localX > plot.x + plot.width || localY < plot.y || localY > plot.y + plot.height) return null;
       const dataPoint = this.screenToData(localX, localY);
       if (!dataPoint) return null;
       let closest = this.filteredData[0];
@@ -463,7 +457,7 @@
         startClientX: event.clientX,
         startClientY: event.clientY,
         startViewX: { ...this.viewX },
-        startManualY: this.manualY ? { ...this.manualY } : null,
+        startManualY: this.manualY ? { ...this.manualY } : this.getYRange(this.filteredData),
       };
     }
 
@@ -471,11 +465,8 @@
       if (this.drag) return;
       const found = this.findClosestPoint(event.clientX, event.clientY);
       this.hoveredPoint = found;
-      if (found) {
-        this.placeTooltip(found.point, found.localX, found.localY);
-      } else {
-        this.hideTooltip();
-      }
+      if (found) this.placeTooltip(found.point, found.localX, found.localY);
+      else this.hideTooltip();
       this.draw();
     }
 
@@ -492,13 +483,10 @@
       const dx = event.clientX - this.drag.startClientX;
       const rangeX = this.drag.startViewX.max - this.drag.startViewX.min;
       const deltaX = (dx / plot.width) * rangeX;
-      this.viewX = clampXView(
-        {
-          min: this.drag.startViewX.min - deltaX,
-          max: this.drag.startViewX.max - deltaX,
-        },
-        this.fullXRange,
-      );
+      this.viewX = clampXView({
+        min: this.drag.startViewX.min - deltaX,
+        max: this.drag.startViewX.max - deltaX,
+      }, this.fullXRange);
 
       if (event.shiftKey && this.drag.startManualY) {
         const dy = event.clientY - this.drag.startClientY;
@@ -523,9 +511,7 @@
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
       const plot = this.getPlotRect();
-      if (localX < plot.x || localX > plot.x + plot.width || localY < plot.y || localY > plot.y + plot.height) {
-        return;
-      }
+      if (localX < plot.x || localX > plot.x + plot.width || localY < plot.y || localY > plot.y + plot.height) return;
       const zoomFactor = Math.exp(event.deltaY * 0.0014);
 
       if (event.shiftKey) {
@@ -536,18 +522,14 @@
           min: yValue - (yValue - yRange.min) * zoomFactor,
           max: yValue + (yRange.max - yValue) * zoomFactor,
         };
-        if (next.max - next.min > 1e-9) {
-          this.manualY = next;
-        }
+        if (next.max - next.min > 1e-9) this.manualY = next;
       } else {
         const xValue = this.viewX.min + ((localX - plot.x) / plot.width) * (this.viewX.max - this.viewX.min);
         const next = {
           min: xValue - (xValue - this.viewX.min) * zoomFactor,
           max: xValue + (this.viewX.max - xValue) * zoomFactor,
         };
-        if (next.max - next.min > 1000) {
-          this.viewX = clampXView(next, this.fullXRange);
-        }
+        if (next.max - next.min > 1000) this.viewX = clampXView(next, this.fullXRange);
       }
       this.draw();
     }
@@ -577,24 +559,26 @@
     return { min, max };
   }
 
-  function buildXTicks(viewX, count) {
+  function buildXTicks(viewX, segments) {
     if (!viewX) return [];
     const ticks = [];
-    const step = (viewX.max - viewX.min) / count;
-    for (let i = 0; i <= count; i += 1) {
-      ticks.push(viewX.min + step * i);
-    }
+    const step = (viewX.max - viewX.min) / segments;
+    for (let i = 0; i <= segments; i += 1) ticks.push(viewX.min + step * i);
     return ticks;
   }
 
-  function formatAxisTime(timestamp) {
-    return formatDateTime.format(new Date(timestamp));
+  function buildYTicks(range, segments) {
+    const ticks = [];
+    for (let i = 0; i <= segments; i += 1) {
+      ticks.push(range.max - ((range.max - range.min) / segments) * i);
+    }
+    return ticks;
   }
 
   function formatNumber(value) {
     if (!Number.isFinite(value)) return '—';
     const abs = Math.abs(value);
-    const digits = abs >= 100 ? 0 : abs >= 10 ? 2 : 2;
+    const digits = abs >= 100 ? 0 : 2;
     return value.toFixed(digits);
   }
 
@@ -610,6 +594,15 @@
     return Number.isFinite(ts) ? ts : null;
   }
 
+  function hexToRgba(hex, alpha) {
+    const sanitized = hex.replace('#', '');
+    if (sanitized.length !== 6) return `rgba(123, 191, 255, ${alpha})`;
+    const r = Number.parseInt(sanitized.slice(0, 2), 16);
+    const g = Number.parseInt(sanitized.slice(2, 4), 16);
+    const b = Number.parseInt(sanitized.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
   function showMessage(text, type = 'success') {
     if (!refs.messageBox) return;
     const div = document.createElement('div');
@@ -618,10 +611,8 @@
     refs.messageBox.innerHTML = '';
     refs.messageBox.appendChild(div);
     window.setTimeout(() => {
-      if (div.parentNode === refs.messageBox) {
-        refs.messageBox.removeChild(div);
-      }
-    }, 4200);
+      if (div.parentNode === refs.messageBox) refs.messageBox.removeChild(div);
+    }, 3800);
   }
 
   async function readJsonResponse(response) {
@@ -654,23 +645,13 @@
     }).then(readJsonResponse);
   }
 
-  function updateRuntimeStatus(runtimeStatus = {}) {
-    if (refs.lastPoll) refs.lastPoll.textContent = runtimeStatus.last_poll_at || '—';
-    if (refs.lastSuccess) refs.lastSuccess.textContent = runtimeStatus.last_success_at || '—';
-    if (refs.lastError) refs.lastError.textContent = runtimeStatus.last_error || 'нет';
-  }
-
   function findDeviceByHash(deviceHash) {
     return state.devices.find((item) => item.device_hash === deviceHash) || null;
   }
 
   function refreshDeviceMeta() {
     const device = findDeviceByHash(state.selectedDeviceHash);
-    if (!device) {
-      refs.deviceMeta.textContent = 'Устройство не выбрано';
-      return;
-    }
-    refs.deviceMeta.textContent = `${device.name} · hash ${device.device_hash} · ${device.thingspeak_url}`;
+    refs.deviceMeta.textContent = device ? `${device.name} · ${device.thingspeak_url}` : 'Устройство не выбрано';
   }
 
   function refreshDeviceSelect() {
@@ -768,7 +749,6 @@
     const payload = await requestJson(app.bootstrap_url, { method: 'GET', headers: {} });
     state.devices = Array.isArray(payload.devices) ? payload.devices : [];
     state.destinations = Array.isArray(payload.destinations) ? payload.destinations : [];
-    updateRuntimeStatus(payload.runtime_status || {});
     refreshDeviceSelect();
     repopulateTable(refs.devicesTable, state.devices, 'device');
     repopulateTable(refs.destinationsTable, state.destinations, 'destination');
@@ -794,7 +774,7 @@
       state.lastLoadedDeviceHash = state.selectedDeviceHash;
       if (!silent) {
         const device = findDeviceByHash(state.selectedDeviceHash);
-        showMessage(`Загружено ${items.length} точек для ${device ? device.name : state.selectedDeviceHash}`);
+        showMessage(`Загружено ${items.length} точек${device ? ` · ${device.name}` : ''}`);
       }
     } catch (error) {
       showMessage(error.message || 'Не удалось загрузить данные', 'error');
@@ -811,7 +791,7 @@
     refreshDeviceSelect();
     repopulateTable(refs.devicesTable, state.devices, 'device');
     await loadMeasurements({ silent: true });
-    showMessage('Список устройств сохранён');
+    showMessage('Устройства сохранены');
   }
 
   async function saveDestinations() {
@@ -822,7 +802,7 @@
     });
     state.destinations = Array.isArray(payload.destinations) ? payload.destinations : [];
     repopulateTable(refs.destinationsTable, state.destinations, 'destination');
-    showMessage('Список конечных серверов сохранён');
+    showMessage('Серверы сохранены');
   }
 
   function wireTableDelete(table) {
@@ -837,19 +817,14 @@
   async function refreshLoop() {
     try {
       const bootstrap = await requestJson(app.bootstrap_url, { method: 'GET', headers: {} });
-      updateRuntimeStatus(bootstrap.runtime_status || {});
       const incomingDevices = Array.isArray(bootstrap.devices) ? bootstrap.devices : [];
       const incomingDestinations = Array.isArray(bootstrap.destinations) ? bootstrap.destinations : [];
-      const deviceSignature = JSON.stringify(incomingDevices);
-      const currentSignature = JSON.stringify(state.devices);
-      if (deviceSignature !== currentSignature) {
+      if (JSON.stringify(incomingDevices) !== JSON.stringify(state.devices)) {
         state.devices = incomingDevices;
         refreshDeviceSelect();
         repopulateTable(refs.devicesTable, state.devices, 'device');
       }
-      const destSignature = JSON.stringify(incomingDestinations);
-      const currentDestSignature = JSON.stringify(state.destinations);
-      if (destSignature !== currentDestSignature) {
+      if (JSON.stringify(incomingDestinations) !== JSON.stringify(state.destinations)) {
         state.destinations = incomingDestinations;
         repopulateTable(refs.destinationsTable, state.destinations, 'destination');
       }
@@ -860,42 +835,45 @@
   }
 
   async function init() {
-    try {
-      refreshDeviceSelect();
+    refs.themeButtons.forEach((button) => {
+      button.addEventListener('click', () => applyTheme(button.dataset.themeValue));
+    });
+    applyTheme(state.theme);
+
+    refreshDeviceSelect();
+    refreshDeviceMeta();
+    wireTableDelete(refs.devicesTable);
+    wireTableDelete(refs.destinationsTable);
+
+    document.getElementById('add-device').addEventListener('click', () => addDeviceRow());
+    document.getElementById('add-destination').addEventListener('click', () => addDestinationRow());
+    document.getElementById('save-devices').addEventListener('click', async () => {
+      try {
+        await saveDevices();
+      } catch (error) {
+        showMessage(error.message || 'Не удалось сохранить устройства', 'error');
+      }
+    });
+    document.getElementById('save-destinations').addEventListener('click', async () => {
+      try {
+        await saveDestinations();
+      } catch (error) {
+        showMessage(error.message || 'Не удалось сохранить конечные серверы', 'error');
+      }
+    });
+
+    refs.deviceSelect.addEventListener('change', async () => {
+      state.selectedDeviceHash = refs.deviceSelect.value || null;
       refreshDeviceMeta();
-      wireTableDelete(refs.devicesTable);
-      wireTableDelete(refs.destinationsTable);
-
-      document.getElementById('add-device').addEventListener('click', () => addDeviceRow());
-      document.getElementById('add-destination').addEventListener('click', () => addDestinationRow());
-      document.getElementById('save-devices').addEventListener('click', async () => {
-        try {
-          await saveDevices();
-        } catch (error) {
-          showMessage(error.message || 'Не удалось сохранить устройства', 'error');
-        }
-      });
-      document.getElementById('save-destinations').addEventListener('click', async () => {
-        try {
-          await saveDestinations();
-        } catch (error) {
-          showMessage(error.message || 'Не удалось сохранить конечные серверы', 'error');
-        }
-      });
-
-      refs.deviceSelect.addEventListener('change', async () => {
-        state.selectedDeviceHash = refs.deviceSelect.value || null;
-        refreshDeviceMeta();
-        await loadMeasurements({ silent: true });
-      });
-
-      await loadBootstrap();
       await loadMeasurements({ silent: true });
-      state.autoRefreshHandle = window.setInterval(refreshLoop, refreshIntervalMs);
-    } catch (error) {
-      showMessage(error.message || 'Ошибка инициализации интерфейса', 'error');
-    }
+    });
+
+    await loadBootstrap();
+    await loadMeasurements({ silent: true });
+    state.autoRefreshHandle = window.setInterval(refreshLoop, refreshIntervalMs);
   }
 
-  init();
+  init().catch((error) => {
+    showMessage(error.message || 'Ошибка инициализации интерфейса', 'error');
+  });
 })();
