@@ -74,17 +74,17 @@ button, input, select, textarea { font: inherit; }
 
 .app-frame {
   height: 100dvh;
-  padding: 10px;
+  padding: 8px;
   display: grid;
   grid-template-rows: auto 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .topbar {
   display: grid;
   grid-template-columns: 140px minmax(280px, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .topbar__brand,
@@ -101,9 +101,9 @@ button, input, select, textarea { font: inherit; }
 .topbar__brand,
 .device-bar,
 .topbar__actions {
-  min-height: 56px;
+  min-height: 48px;
   border-radius: var(--radius-card);
-  padding: 8px 12px;
+  padding: 6px 10px;
 }
 
 .topbar__brand {
@@ -136,7 +136,7 @@ button, input, select, textarea { font: inherit; }
 input {
   width: 100%;
   min-width: 0;
-  padding: 9px 11px;
+  padding: 8px 10px;
   border-radius: var(--radius-control);
   border: 1px solid var(--border);
   background: var(--bg-card-soft);
@@ -180,7 +180,7 @@ input:focus {
 
 .theme-switch__button {
   border-radius: 8px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: transparent;
   color: var(--text-soft);
 }
@@ -194,7 +194,7 @@ input:focus {
 .primary-button,
 .chip-button {
   border-radius: 10px;
-  padding: 8px 12px;
+  padding: 6px 10px;
 }
 
 .secondary-button,
@@ -219,7 +219,7 @@ input:focus {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 470px;
-  gap: 10px;
+  gap: 8px;
 }
 
 .charts-panel,
@@ -250,7 +250,7 @@ input:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .chart-card,
@@ -262,7 +262,7 @@ input:focus {
 .chart-card {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  padding: 10px;
+  padding: 8px;
   overflow: hidden;
 }
 
@@ -274,7 +274,7 @@ input:focus {
   gap: 8px;
 }
 .chart-card__header {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .chart-card__header h2,
 .data-card__header h3,
@@ -318,7 +318,7 @@ input:focus {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding-top: 7px;
+  padding-top: 6px;
   font-size: 12px;
   color: var(--text-soft);
 }
@@ -327,13 +327,13 @@ input:focus {
 .side-panel {
   display: grid;
   grid-template-rows: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .data-card {
   display: grid;
   grid-template-rows: auto 1fr;
-  padding: 10px;
+  padding: 8px;
 }
 
 .table-shell {
@@ -399,7 +399,7 @@ input:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 .login-card h1 { margin-top: 18px; font-size: 26px; }
 .login-form {
@@ -433,4 +433,103 @@ input:focus {
   }
   .layout { grid-template-rows: auto auto; }
   .side-panel { grid-template-rows: auto auto; }
+}
+
+
+.table-shell tbody tr.is-selected td {
+  background: rgba(78, 184, 209, 0.05);
+}
+
+.table-shell tbody tr.blink-grey td {
+  animation: row-blink-grey 1s ease;
+}
+
+.table-shell tbody tr.blink-green td {
+  animation: row-blink-green 1s ease;
+}
+
+.table-shell tbody tr.blink-red td {
+  animation: row-blink-red 1s ease;
+}
+
+@keyframes row-blink-grey {
+  0% { background: transparent; }
+  18% { background: rgba(146, 154, 168, 0.32); }
+  100% { background: transparent; }
+}
+
+@keyframes row-blink-green {
+  0% { background: transparent; }
+  18% { background: rgba(62, 179, 105, 0.36); }
+  100% { background: transparent; }
+}
+
+@keyframes row-blink-red {
+  0% { background: transparent; }
+  18% { background: rgba(208, 106, 126, 0.34); }
+  100% { background: transparent; }
+}
+
+.chart-menu {
+  position: fixed;
+  z-index: 40;
+  width: 240px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+}
+
+.chart-menu[hidden] {
+  display: none;
+}
+
+.chart-menu__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.chart-menu__field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.chart-menu__field output {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.chart-menu__field--checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-menu__field--checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.chart-menu__actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chart-menu input[type="color"] {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 4px;
+}
+
+.chart-menu input[type="range"] {
+  width: 100%;
 }

@@ -77,12 +77,33 @@ class Database:
         if not device_hash and not device_name:
             return []
         with self.session() as session:
-            stmt = select(Measurement)
+            base_stmt = select(Measurement)
             if device_hash:
-                stmt = stmt.where(Measurement.device_hash == device_hash)
+                base_stmt = base_stmt.where(Measurement.device_hash == device_hash)
             elif device_name:
-                stmt = stmt.where(Measurement.device_name == device_name)
-            stmt = stmt.order_by(Measurement.source_created_at.asc().nulls_last(), Measurement.event_id.asc())
-            if limit is not None:
-                stmt = stmt.limit(limit)
+                base_stmt = base_stmt.where(Measurement.device_name == device_name)
+
+            order_columns = (
+                Measurement.source_created_at.asc().nulls_last(),
+                Measurement.event_id.asc(),
+            )
+
+            if limit is None:
+                stmt = base_stmt.order_by(*order_columns)
+                return list(session.execute(stmt).scalars())
+
+            latest_subquery = (
+                base_stmt.order_by(
+                    Measurement.source_created_at.desc().nulls_first(),
+                    Measurement.event_id.desc(),
+                )
+                .limit(limit)
+                .subquery()
+            )
+            stmt = select(Measurement).from_statement(
+                select(latest_subquery).order_by(
+                    latest_subquery.c.source_created_at.asc().nulls_last(),
+                    latest_subquery.c.event_id.asc(),
+                )
+            )
             return list(session.execute(stmt).scalars())

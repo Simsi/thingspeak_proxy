@@ -102,14 +102,12 @@ def logout() -> Response:
 @login_required
 def monitoring() -> str:
     memory_snapshot = current_app.extensions["memory_store"].get_snapshot()
-    runtime_status = current_app.extensions["runtime_status"]
     return render_template(
         "monitoring.html",
         username=session.get("username"),
         csrf_token=session.get("csrf_token"),
         devices=memory_snapshot["devices"],
         destinations=memory_snapshot["destinations"],
-        runtime_status=runtime_status,
     )
 
 
@@ -128,18 +126,14 @@ def health() -> Response:
 @api_login_required
 def bootstrap() -> Response:
     memory_snapshot = current_app.extensions["memory_store"].get_snapshot()
-    runtime_status = current_app.extensions["runtime_status"]
+    runtime_status = current_app.extensions["runtime_status"].snapshot()
     return jsonify(
         {
             "ok": True,
             "devices": memory_snapshot["devices"],
             "destinations": memory_snapshot["destinations"],
             "selected_device": memory_snapshot["devices"][0]["name"] if memory_snapshot["devices"] else None,
-            "runtime_status": {
-                "last_poll_at": runtime_status.last_poll_at,
-                "last_success_at": runtime_status.last_success_at,
-                "last_error": runtime_status.last_error,
-            },
+            "runtime_status": runtime_status,
         }
     )
 
@@ -156,7 +150,7 @@ def measurements() -> Response:
     limit: int | None = None
     if limit_arg:
         try:
-            limit = max(1, min(int(limit_arg), 10000))
+            limit = max(1, min(int(limit_arg), 50000))
         except ValueError:
             return jsonify({"ok": False, "error": "Параметр limit должен быть числом"}), 400
 

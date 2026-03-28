@@ -4,6 +4,8 @@
 
   const csrfToken = app.csrf_token;
   const refreshIntervalMs = Number(app.refresh_interval_ms || 15000);
+  const EDGE_PAD_RATIO = 0.06;
+  const EDGE_PAD_MIN_MS = 60_000;
 
   const refs = {
     messageBox: document.getElementById('message-box'),
@@ -12,6 +14,16 @@
     devicesTable: document.getElementById('devices-table'),
     destinationsTable: document.getElementById('destinations-table'),
     themeButtons: Array.from(document.querySelectorAll('[data-theme-value]')),
+    chartMenu: document.getElementById('chart-menu'),
+    chartMenuTitle: document.getElementById('chart-menu-title'),
+    chartMenuColor: document.getElementById('chart-menu-color'),
+    chartMenuLineWidth: document.getElementById('chart-menu-line-width'),
+    chartMenuLineWidthOutput: document.getElementById('chart-menu-line-width-output'),
+    chartMenuFillOpacity: document.getElementById('chart-menu-fill-opacity'),
+    chartMenuFillOpacityOutput: document.getElementById('chart-menu-fill-opacity-output'),
+    chartMenuShowPoints: document.getElementById('chart-menu-show-points'),
+    chartMenuReset: document.getElementById('chart-menu-reset'),
+    chartMenuClose: document.getElementById('chart-menu-close'),
   };
 
   const chartConfigs = [
@@ -29,6 +41,9 @@
     lastLoadedDeviceHash: null,
     autoRefreshHandle: null,
     theme: readInitialTheme(),
+    runtimeStatus: null,
+    lastDeviceStatusSeen: {},
+    chartMenuField: null,
   };
 
   const formatAxisDate = new Intl.DateTimeFormat('ru-RU', {
@@ -36,15 +51,6 @@
     month: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-  });
-
-  const formatTooltipDate = new Intl.DateTimeFormat('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
   });
 
   function readInitialTheme() {
@@ -66,11 +72,52 @@
     refs.themeButtons.forEach((button) => {
       button.setAttribute('aria-pressed', String(button.dataset.themeValue === theme));
     });
-    Object.values(charts).forEach((chart) => chart.draw());
+    Object.values(charts).forEach((chart) => {
+      chart.syncThemeDefaults();
+      chart.draw();
+    });
   }
 
   function cssVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function chartSettingsKey(fieldName) {
+    return `ts-monitor-chart-style:${fieldName}`;
+  }
+
+  function getDefaultChartSettings(fieldName, colorVar) {
+    return {
+      lineColor: cssVar(colorVar) || '#4eb8d1',
+      lineWidth: 2.2,
+      fillOpacity: 0.12,
+      showPoints: false,
+    };
+  }
+
+  function loadChartSettings(fieldName, colorVar) {
+    const defaults = getDefaultChartSettings(fieldName, colorVar);
+    try {
+      const raw = localStorage.getItem(chartSettingsKey(fieldName));
+      if (!raw) return defaults;
+      const parsed = JSON.parse(raw);
+      return {
+        lineColor: typeof parsed.lineColor === 'string' ? parsed.lineColor : defaults.lineColor,
+        lineWidth: Number.isFinite(Number(parsed.lineWidth)) ? clamp(Number(parsed.lineWidth), 1, 6) : defaults.lineWidth,
+        fillOpacity: Number.isFinite(Number(parsed.fillOpacity)) ? clamp(Number(parsed.fillOpacity), 0, 0.45) : defaults.fillOpacity,
+        showPoints: Boolean(parsed.showPoints),
+      };
+    } catch (error) {
+      return defaults;
+    }
+  }
+
+  function saveChartSettings(fieldName, settings) {
+    try {
+      localStorage.setItem(chartSettingsKey(fieldName), JSON.stringify(settings));
+    } catch (error) {
+      // ignore
+    }
   }
 
   class InteractiveChart {
@@ -93,25 +140,48 @@
       this.hoveredPoint = null;
       this.drag = null;
       this.lastRect = null;
+      this.menuCandidate = null;
+      this.settings = loadChartSettings(this.fieldName, this.colorVar);
 
       this.canvas.addEventListener('wheel', (event) => this.onWheel(event), { passive: false });
       this.canvas.addEventListener('pointerdown', (event) => this.onPointerDown(event));
       this.canvas.addEventListener('pointermove', (event) => this.onPointerMove(event));
       this.canvas.addEventListener('pointerleave', () => this.onPointerLeave());
       this.canvas.addEventListener('dblclick', () => this.resetView());
-      window.addEventListener('pointerup', () => this.onPointerUp());
+      window.addEventListener('pointerup', (event) => this.onPointerUp(event));
       window.addEventListener('pointermove', (event) => this.onWindowPointerMove(event));
+      this.canvas.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        openChartMenu(this, event.clientX, event.clientY);
+      });
 
       this.resizeObserver = new ResizeObserver(() => this.resize());
       this.resizeObserver.observe(this.stage);
       this.resize();
     }
 
+    syncThemeDefaults() {
+      const defaults = getDefaultChartSettings(this.fieldName, this.colorVar);
+      const stored = loadChartSettings(this.fieldName, this.colorVar);
+      if (!stored.lineColor) stored.lineColor = defaults.lineColor;
+      this.settings = stored;
+    }
+
     get color() {
-      return cssVar(this.colorVar) || '#7bbfff';
+      return this.settings.lineColor || cssVar(this.colorVar) || '#7bbfff';
+    }
+
+    get paddedBounds() {
+      return getPaddedBounds(this.fullXRange);
     }
 
     setData(items) {
+      const previousFullRange = this.fullXRange ? { ...this.fullXRange } : null;
+      const previousBounds = getPaddedBounds(previousFullRange);
+      const wasPinnedRight = Boolean(
+        this.viewX && previousBounds && this.viewX.max >= previousBounds.max - Math.max(5_000, (previousBounds.max - previousBounds.min) * 0.005)
+      );
+
       const fallbackBase = Date.now();
       const normalized = [];
       items.forEach((item, index) => {
@@ -137,10 +207,32 @@
         : null;
 
       const shouldReset = !this.viewX || state.lastLoadedDeviceHash !== state.selectedDeviceHash;
-      if (shouldReset) this.resetView(false);
-      else this.viewX = clampXView(this.viewX, this.fullXRange);
+      if (shouldReset) {
+        this.resetView(false);
+      } else if (wasPinnedRight && this.fullXRange) {
+        const bounds = this.paddedBounds;
+        const width = Math.max(1000, this.viewX.max - this.viewX.min);
+        this.viewX = clampXView({ min: bounds.max - width, max: bounds.max }, this.fullXRange);
+      } else {
+        this.viewX = clampXView(this.viewX, this.fullXRange);
+      }
 
       this.updateSummary();
+      this.draw();
+    }
+
+    updateSettings(partial) {
+      this.settings = {
+        ...this.settings,
+        ...partial,
+      };
+      saveChartSettings(this.fieldName, this.settings);
+      this.draw();
+    }
+
+    resetSettings() {
+      this.settings = getDefaultChartSettings(this.fieldName, this.colorVar);
+      saveChartSettings(this.fieldName, this.settings);
       this.draw();
     }
 
@@ -152,9 +244,8 @@
         if (drawNow) this.draw();
         return;
       }
-      const min = this.fullXRange.min;
-      const max = this.fullXRange.max;
-      this.viewX = min === max ? { min: min - 60_000, max: max + 60_000 } : { min, max };
+      const bounds = this.paddedBounds;
+      this.viewX = bounds ? { ...bounds } : null;
       if (drawNow) this.draw();
     }
 
@@ -175,10 +266,10 @@
       const width = this.lastRect ? this.lastRect.width : this.stage.clientWidth;
       const height = this.lastRect ? this.lastRect.height : this.stage.clientHeight;
       return {
-        x: 52,
+        x: 54,
         y: 10,
-        width: Math.max(10, width - 64),
-        height: Math.max(10, height - 34),
+        width: Math.max(12, width - 68),
+        height: Math.max(12, height - 34),
       };
     }
 
@@ -225,8 +316,10 @@
         return;
       }
 
-      const xScale = (value) => plot.x + ((value - this.viewX.min) / (this.viewX.max - this.viewX.min)) * plot.width;
-      const yScale = (value) => plot.y + plot.height - ((value - yRange.min) / (yRange.max - yRange.min)) * plot.height;
+      const xSpan = Math.max(1, this.viewX.max - this.viewX.min);
+      const ySpan = Math.max(1e-9, yRange.max - yRange.min);
+      const xScale = (value) => plot.x + ((value - this.viewX.min) / xSpan) * plot.width;
+      const yScale = (value) => plot.y + plot.height - ((value - yRange.min) / ySpan) * plot.height;
 
       ctx.save();
       ctx.beginPath();
@@ -234,7 +327,7 @@
       ctx.clip();
 
       const fillGradient = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.height);
-      fillGradient.addColorStop(0, hexToRgba(this.color, 0.14));
+      fillGradient.addColorStop(0, hexToRgba(this.color, this.settings.fillOpacity));
       fillGradient.addColorStop(1, hexToRgba(this.color, 0));
 
       ctx.beginPath();
@@ -244,11 +337,11 @@
         if (index === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
-      ctx.lineWidth = 2.1;
+      ctx.lineWidth = this.settings.lineWidth;
       ctx.strokeStyle = this.color;
       ctx.stroke();
 
-      if (this.filteredData.length > 1) {
+      if (this.filteredData.length > 1 && this.settings.fillOpacity > 0) {
         const first = this.filteredData[0];
         const last = this.filteredData[this.filteredData.length - 1];
         ctx.lineTo(xScale(last.x), plot.y + plot.height);
@@ -258,11 +351,11 @@
         ctx.fill();
       }
 
-      if (this.filteredData.length <= 220) {
+      if (this.settings.showPoints || this.filteredData.length <= 180) {
         ctx.fillStyle = this.color;
         this.filteredData.forEach((point) => {
           ctx.beginPath();
-          ctx.arc(xScale(point.x), yScale(point.y), 1.7, 0, Math.PI * 2);
+          ctx.arc(xScale(point.x), yScale(point.y), Math.max(1.5, this.settings.lineWidth * 0.9), 0, Math.PI * 2);
           ctx.fill();
         });
       }
@@ -278,7 +371,7 @@
         ctx.lineTo(x, plot.y + plot.height);
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.arc(x, y, Math.max(3, this.settings.lineWidth * 1.7), 0, Math.PI * 2);
         ctx.fillStyle = this.color;
         ctx.fill();
       }
@@ -295,7 +388,6 @@
       background.addColorStop(1, cssVar('--chart-bg-bottom'));
       ctx.fillStyle = background;
       ctx.fillRect(0, 0, width, height);
-      if (!plot) return;
 
       ctx.save();
       ctx.strokeStyle = cssVar('--chart-grid');
@@ -339,7 +431,6 @@
 
     drawEmptyState(plot) {
       const ctx = this.ctx;
-      if (!plot) return;
       ctx.save();
       ctx.fillStyle = cssVar('--text-muted');
       ctx.font = '14px Inter, sans-serif';
@@ -402,6 +493,7 @@
     }
 
     onPointerDown(event) {
+      closeChartMenu();
       if (!this.viewX || event.button !== 0) return;
       this.canvas.setPointerCapture(event.pointerId);
       this.drag = {
@@ -409,7 +501,9 @@
         startClientY: event.clientY,
         startViewX: { ...this.viewX },
         startManualY: this.manualY ? { ...this.manualY } : this.getYRange(this.filteredData),
+        moved: false,
       };
+      this.menuCandidate = { x: event.clientX, y: event.clientY, time: Date.now() };
     }
 
     onPointerMove(event) {
@@ -444,16 +538,25 @@
           max: this.drag.startManualY.max + deltaY,
         };
       }
+      if (Math.abs(dx) > 3 || Math.abs(event.clientY - this.drag.startClientY) > 3) this.drag.moved = true;
       this.draw();
     }
 
-    onPointerUp() {
+    onPointerUp(event) {
+      if (!this.drag) return;
+      const wasMoved = this.drag.moved;
+      const candidate = this.menuCandidate;
       this.drag = null;
+      this.menuCandidate = null;
+      if (!wasMoved && candidate && Date.now() - candidate.time < 350) {
+        openChartMenu(this, event.clientX, event.clientY);
+      }
     }
 
     onWheel(event) {
       if (!this.viewX || !this.fullXRange) return;
       event.preventDefault();
+      closeChartMenu();
       const rect = this.canvas.getBoundingClientRect();
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
@@ -484,24 +587,32 @@
 
   const charts = Object.fromEntries(chartConfigs.map((config) => [config.fieldName, new InteractiveChart(config)]));
 
+  function getPaddedBounds(fullRange) {
+    if (!fullRange) return null;
+    const span = Math.max(1000, fullRange.max - fullRange.min);
+    const pad = Math.max(EDGE_PAD_MIN_MS, span * EDGE_PAD_RATIO);
+    return { min: fullRange.min - pad, max: fullRange.max + pad };
+  }
+
   function clampXView(view, fullRange) {
     if (!view || !fullRange) return view;
-    const fullWidth = Math.max(1000, fullRange.max - fullRange.min);
+    const bounds = getPaddedBounds(fullRange);
+    const fullWidth = Math.max(1000, bounds.max - bounds.min);
     let width = Math.max(1000, view.max - view.min);
     width = Math.min(width, fullWidth);
     let min = view.min;
     let max = min + width;
-    if (min < fullRange.min) {
-      min = fullRange.min;
+    if (min < bounds.min) {
+      min = bounds.min;
       max = min + width;
     }
-    if (max > fullRange.max) {
-      max = fullRange.max;
+    if (max > bounds.max) {
+      max = bounds.max;
       min = max - width;
     }
     if (width >= fullWidth) {
-      min = fullRange.min;
-      max = fullRange.max;
+      min = bounds.min;
+      max = bounds.max;
     }
     return { min, max };
   }
@@ -550,6 +661,10 @@
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
   function showMessage(text, type = 'success') {
     if (!refs.messageBox) return;
     const div = document.createElement('div');
@@ -594,6 +709,12 @@
 
   function findDeviceByHash(deviceHash) {
     return state.devices.find((item) => item.device_hash === deviceHash) || null;
+  }
+
+  function getSelectedDeviceStatus() {
+    const statuses = state.runtimeStatus && state.runtimeStatus.device_statuses;
+    if (!statuses || !state.selectedDeviceHash) return null;
+    return statuses[state.selectedDeviceHash] || null;
   }
 
   function refreshDeviceMeta() {
@@ -655,11 +776,13 @@
   function addDeviceRow(item = {}) {
     const tbody = refs.devicesTable.querySelector('tbody');
     const tr = document.createElement('tr');
+    tr.dataset.deviceHash = item.device_hash || '';
     tr.appendChild(buildInputCell('name', item.name || ''));
     tr.appendChild(buildInputCell('thingspeak_url', item.thingspeak_url || ''));
     tr.appendChild(buildInputCell('device_hash', item.device_hash || '', true));
     tr.appendChild(buildDeleteCell());
     tbody.appendChild(tr);
+    return tr;
   }
 
   function addDestinationRow(item = {}) {
@@ -671,6 +794,7 @@
     tr.appendChild(buildInputCell('path', item.path || ''));
     tr.appendChild(buildDeleteCell());
     tbody.appendChild(tr);
+    return tr;
   }
 
   function collectTableRows(table) {
@@ -692,6 +816,40 @@
       if (kind === 'device') addDeviceRow(item);
       else addDestinationRow(item);
     });
+    if (kind === 'device') applySelectedDeviceRowState();
+  }
+
+  function applySelectedDeviceRowState() {
+    const rows = Array.from(refs.devicesTable.querySelectorAll('tbody tr'));
+    rows.forEach((row) => {
+      const isSelected = row.dataset.deviceHash && row.dataset.deviceHash === state.selectedDeviceHash;
+      row.classList.toggle('is-selected', isSelected);
+    });
+  }
+
+  function blinkSelectedDeviceRow(status) {
+    const row = refs.devicesTable.querySelector(`tbody tr[data-device-hash="${CSS.escape(state.selectedDeviceHash || '')}"]`);
+    if (!row) return;
+    row.classList.remove('blink-green', 'blink-grey', 'blink-red');
+    void row.offsetWidth;
+    if (status === 'success_new') row.classList.add('blink-green');
+    else if (status === 'success_empty') row.classList.add('blink-grey');
+    else if (status === 'error') row.classList.add('blink-red');
+    window.setTimeout(() => {
+      row.classList.remove('blink-green', 'blink-grey', 'blink-red');
+    }, 1000);
+  }
+
+  function consumeRuntimeStatus(runtimeStatus) {
+    state.runtimeStatus = runtimeStatus || null;
+    applySelectedDeviceRowState();
+    const current = getSelectedDeviceStatus();
+    if (!current || !state.selectedDeviceHash) return;
+    const lastSeen = state.lastDeviceStatusSeen[state.selectedDeviceHash];
+    if (current.updated_at && current.updated_at !== lastSeen) {
+      state.lastDeviceStatusSeen[state.selectedDeviceHash] = current.updated_at;
+      blinkSelectedDeviceRow(current.state);
+    }
   }
 
   async function loadBootstrap() {
@@ -701,6 +859,7 @@
     refreshDeviceSelect();
     repopulateTable(refs.devicesTable, state.devices, 'device');
     repopulateTable(refs.destinationsTable, state.destinations, 'destination');
+    consumeRuntimeStatus(payload.runtime_status || null);
   }
 
   async function loadMeasurements({ silent = false } = {}) {
@@ -711,7 +870,6 @@
 
     const params = new URLSearchParams({
       device_hash: state.selectedDeviceHash,
-      limit: '5000',
       _ts: String(Date.now()),
     });
 
@@ -777,10 +935,95 @@
         state.destinations = incomingDestinations;
         repopulateTable(refs.destinationsTable, state.destinations, 'destination');
       }
+      consumeRuntimeStatus(bootstrap.runtime_status || null);
       await loadMeasurements({ silent: true });
     } catch (error) {
       showMessage(error.message || 'Ошибка фонового обновления', 'error');
     }
+  }
+
+  function openChartMenu(chart, clientX, clientY) {
+    state.chartMenuField = chart.fieldName;
+    refs.chartMenuTitle.textContent = `Настройка · ${chart.label}`;
+    refs.chartMenuColor.value = chart.settings.lineColor;
+    refs.chartMenuLineWidth.value = String(chart.settings.lineWidth);
+    refs.chartMenuLineWidthOutput.textContent = Number(chart.settings.lineWidth).toFixed(1);
+    refs.chartMenuFillOpacity.value = String(chart.settings.fillOpacity);
+    refs.chartMenuFillOpacityOutput.textContent = Number(chart.settings.fillOpacity).toFixed(2);
+    refs.chartMenuShowPoints.checked = Boolean(chart.settings.showPoints);
+
+    refs.chartMenu.hidden = false;
+    refs.chartMenu.dataset.field = chart.fieldName;
+    positionChartMenu(clientX, clientY);
+  }
+
+  function closeChartMenu() {
+    refs.chartMenu.hidden = true;
+    state.chartMenuField = null;
+  }
+
+  function positionChartMenu(clientX, clientY) {
+    const menu = refs.chartMenu;
+    const margin = 12;
+    const rect = menu.getBoundingClientRect();
+    let left = clientX + 12;
+    let top = clientY + 12;
+    if (left + rect.width > window.innerWidth - margin) left = window.innerWidth - rect.width - margin;
+    if (top + rect.height > window.innerHeight - margin) top = window.innerHeight - rect.height - margin;
+    menu.style.left = `${Math.max(margin, left)}px`;
+    menu.style.top = `${Math.max(margin, top)}px`;
+  }
+
+  function getActiveChartForMenu() {
+    return state.chartMenuField ? charts[state.chartMenuField] : null;
+  }
+
+  function initChartMenu() {
+    refs.chartMenuColor.addEventListener('input', () => {
+      const chart = getActiveChartForMenu();
+      if (!chart) return;
+      chart.updateSettings({ lineColor: refs.chartMenuColor.value });
+    });
+    refs.chartMenuLineWidth.addEventListener('input', () => {
+      const chart = getActiveChartForMenu();
+      if (!chart) return;
+      const value = clamp(Number(refs.chartMenuLineWidth.value), 1, 6);
+      refs.chartMenuLineWidthOutput.textContent = value.toFixed(1);
+      chart.updateSettings({ lineWidth: value });
+    });
+    refs.chartMenuFillOpacity.addEventListener('input', () => {
+      const chart = getActiveChartForMenu();
+      if (!chart) return;
+      const value = clamp(Number(refs.chartMenuFillOpacity.value), 0, 0.45);
+      refs.chartMenuFillOpacityOutput.textContent = value.toFixed(2);
+      chart.updateSettings({ fillOpacity: value });
+    });
+    refs.chartMenuShowPoints.addEventListener('change', () => {
+      const chart = getActiveChartForMenu();
+      if (!chart) return;
+      chart.updateSettings({ showPoints: refs.chartMenuShowPoints.checked });
+    });
+    refs.chartMenuReset.addEventListener('click', () => {
+      const chart = getActiveChartForMenu();
+      if (!chart) return;
+      chart.resetSettings();
+      openChartMenu(chart, parseFloat(refs.chartMenu.style.left || '120'), parseFloat(refs.chartMenu.style.top || '120'));
+    });
+    refs.chartMenuClose.addEventListener('click', closeChartMenu);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeChartMenu();
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (refs.chartMenu.hidden) return;
+      if (refs.chartMenu.contains(event.target)) return;
+      if (event.target.closest('.chart-canvas')) return;
+      closeChartMenu();
+    });
+    window.addEventListener('resize', () => {
+      if (!refs.chartMenu.hidden) {
+        positionChartMenu(window.innerWidth / 2, window.innerHeight / 2);
+      }
+    });
   }
 
   async function init() {
@@ -788,6 +1031,7 @@
       button.addEventListener('click', () => applyTheme(button.dataset.themeValue));
     });
     applyTheme(state.theme);
+    initChartMenu();
 
     refreshDeviceSelect();
     refreshDeviceMeta();
@@ -814,6 +1058,7 @@
     refs.deviceSelect.addEventListener('change', async () => {
       state.selectedDeviceHash = refs.deviceSelect.value || null;
       refreshDeviceMeta();
+      applySelectedDeviceRowState();
       await loadMeasurements({ silent: true });
     });
 

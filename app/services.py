@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import threading
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -23,6 +24,49 @@ class RuntimeStatus:
     last_poll_at: str | None = None
     last_success_at: str | None = None
     last_error: str | None = None
+    device_statuses: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def mark_cycle_start(self) -> None:
+        with self._lock:
+            self.last_poll_at = datetime.utcnow().isoformat() + "Z"
+
+    def mark_cycle_success(self) -> None:
+        with self._lock:
+            self.last_success_at = datetime.utcnow().isoformat() + "Z"
+            self.last_error = None
+
+    def mark_cycle_error(self, message: str) -> None:
+        with self._lock:
+            self.last_error = message
+
+    def set_device_status(
+        self,
+        *,
+        device_hash: str,
+        device_name: str,
+        state: str,
+        new_count: int = 0,
+        error: str | None = None,
+    ) -> None:
+        with self._lock:
+            self.device_statuses[device_hash] = {
+                "device_hash": device_hash,
+                "device_name": device_name,
+                "state": state,
+                "new_count": int(new_count or 0),
+                "error": error,
+                "updated_at": datetime.utcnow().isoformat() + "Z",
+            }
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "last_poll_at": self.last_poll_at,
+                "last_success_at": self.last_success_at,
+                "last_error": self.last_error,
+                "device_statuses": copy.deepcopy(self.device_statuses),
+            }
 
 
 class ThingSpeakClient:
@@ -130,7 +174,7 @@ class SensorPoller:
             try:
                 self.run_cycle()
             except Exception as exc:
-                self.runtime_status.last_error = str(exc)
+                self.runtime_status.mark_cycle_error(str(exc))
                 logger.exception("Ошибка фонового опросчика: %s", exc)
             self.stop_event.wait(self.interval_seconds)
 
@@ -138,19 +182,38 @@ class SensorPoller:
         snapshot = self.memory_store.get_snapshot()
         devices = snapshot.get("devices", [])
         destinations = snapshot.get("destinations", [])
-        self.runtime_status.last_poll_at = datetime.utcnow().isoformat() + "Z"
+        self.runtime_status.mark_cycle_start()
 
         if not devices:
             logger.info("Список устройств пуст, опрашивать нечего")
-            self.runtime_status.last_success_at = self.runtime_status.last_poll_at
-            self.runtime_status.last_error = None
+            self.runtime_status.mark_cycle_success()
             return
 
+        had_errors = False
+        last_error_message: str | None = None
         for device in devices:
-            self._poll_device(device, destinations)
+            try:
+                self._poll_device(device, destinations)
+            except Exception as exc:
+                had_errors = True
+                last_error_message = str(exc)
+                self.runtime_status.set_device_status(
+                    device_hash=device["device_hash"],
+                    device_name=device["name"],
+                    state="error",
+                    error=str(exc),
+                )
+                logger.warning(
+                    "Ошибка опроса устройства %s (%s): %s",
+                    device.get("name"),
+                    device.get("device_hash"),
+                    exc,
+                )
 
-        self.runtime_status.last_success_at = datetime.utcnow().isoformat() + "Z"
-        self.runtime_status.last_error = None
+        if had_errors and last_error_message:
+            self.runtime_status.mark_cycle_error(last_error_message)
+        else:
+            self.runtime_status.mark_cycle_success()
 
     def _backfill_device(self, device: dict[str, Any]) -> None:
         device_name = device["name"]
@@ -242,6 +305,14 @@ class SensorPoller:
                     "surface_temp": normalized["surface_temp"],
                 })
 
+        status = "success_new" if inserted_count > 0 else "success_empty"
+        self.runtime_status.set_device_status(
+            device_hash=device_hash,
+            device_name=device_name,
+            state=status,
+            new_count=inserted_count,
+            error=None,
+        )
         logger.info("Устройство %s: вставлено/обновлено записей %s", device_name, inserted_count)
 
 
