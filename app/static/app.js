@@ -82,8 +82,6 @@
       this.canvas = document.getElementById(config.canvasId);
       this.card = this.canvas.closest('.chart-card');
       this.stage = this.canvas.closest('.chart-stage');
-      this.emptyEl = this.stage.querySelector('.chart-empty');
-      this.tooltipEl = this.stage.querySelector('.chart-tooltip');
       this.lastEl = document.querySelector(`[data-field-last="${this.fieldName}"]`);
       this.rangeEl = document.querySelector(`[data-field-range="${this.fieldName}"]`);
       this.ctx = this.canvas.getContext('2d');
@@ -95,18 +93,6 @@
       this.hoveredPoint = null;
       this.drag = null;
       this.lastRect = null;
-
-      this.card.querySelectorAll('[data-chart-action]').forEach((button) => {
-        button.addEventListener('click', () => {
-          const action = button.dataset.chartAction;
-          if (action === 'reset') {
-            this.resetView();
-          } else if (action === 'fit-y') {
-            this.manualY = null;
-            this.draw();
-          }
-        });
-      });
 
       this.canvas.addEventListener('wheel', (event) => this.onWheel(event), { passive: false });
       this.canvas.addEventListener('pointerdown', (event) => this.onPointerDown(event));
@@ -189,10 +175,10 @@
       const width = this.lastRect ? this.lastRect.width : this.stage.clientWidth;
       const height = this.lastRect ? this.lastRect.height : this.stage.clientHeight;
       return {
-        x: 54,
-        y: 12,
-        width: Math.max(10, width - 68),
-        height: Math.max(10, height - 42),
+        x: 52,
+        y: 10,
+        width: Math.max(10, width - 64),
+        height: Math.max(10, height - 34),
       };
     }
 
@@ -219,7 +205,7 @@
         const pad = Math.max(Math.abs(min) * 0.05, 0.5);
         return { min: min - pad, max: max + pad };
       }
-      const pad = (max - min) * 0.1;
+      const pad = (max - min) * 0.08;
       return { min: min - pad, max: max + pad };
     }
 
@@ -229,20 +215,15 @@
       const height = this.lastRect ? this.lastRect.height : this.stage.clientHeight;
       ctx.clearRect(0, 0, width, height);
 
-      if (!this.data.length || !this.viewX) {
-        this.emptyEl.hidden = false;
-        this.hideTooltip();
-        this.drawChrome(null, null);
+      const plot = this.getPlotRect();
+      this.filteredData = this.getVisibleData();
+      const yRange = this.getYRange(this.filteredData);
+      this.drawChrome(plot, yRange);
+
+      if (!this.data.length || !this.viewX || !this.filteredData.length || !yRange) {
+        this.drawEmptyState(plot);
         return;
       }
-
-      this.emptyEl.hidden = true;
-      const plot = this.getPlotRect();
-      const visibleData = this.getVisibleData();
-      this.filteredData = visibleData;
-      const yRange = this.getYRange(visibleData);
-      this.drawChrome(plot, yRange);
-      if (!visibleData.length || !yRange) return;
 
       const xScale = (value) => plot.x + ((value - this.viewX.min) / (this.viewX.max - this.viewX.min)) * plot.width;
       const yScale = (value) => plot.y + plot.height - ((value - yRange.min) / (yRange.max - yRange.min)) * plot.height;
@@ -253,23 +234,23 @@
       ctx.clip();
 
       const fillGradient = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.height);
-      fillGradient.addColorStop(0, hexToRgba(this.color, 0.18));
+      fillGradient.addColorStop(0, hexToRgba(this.color, 0.14));
       fillGradient.addColorStop(1, hexToRgba(this.color, 0));
 
       ctx.beginPath();
-      visibleData.forEach((point, index) => {
+      this.filteredData.forEach((point, index) => {
         const x = xScale(point.x);
         const y = yScale(point.y);
         if (index === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
-      ctx.lineWidth = 2.2;
+      ctx.lineWidth = 2.1;
       ctx.strokeStyle = this.color;
       ctx.stroke();
 
-      if (visibleData.length > 1) {
-        const first = visibleData[0];
-        const last = visibleData[visibleData.length - 1];
+      if (this.filteredData.length > 1) {
+        const first = this.filteredData[0];
+        const last = this.filteredData[this.filteredData.length - 1];
         ctx.lineTo(xScale(last.x), plot.y + plot.height);
         ctx.lineTo(xScale(first.x), plot.y + plot.height);
         ctx.closePath();
@@ -277,11 +258,11 @@
         ctx.fill();
       }
 
-      if (visibleData.length <= 280) {
+      if (this.filteredData.length <= 220) {
         ctx.fillStyle = this.color;
-        visibleData.forEach((point) => {
+        this.filteredData.forEach((point) => {
           ctx.beginPath();
-          ctx.arc(xScale(point.x), yScale(point.y), 2, 0, Math.PI * 2);
+          ctx.arc(xScale(point.x), yScale(point.y), 1.7, 0, Math.PI * 2);
           ctx.fill();
         });
       }
@@ -298,13 +279,8 @@
         ctx.stroke();
         ctx.beginPath();
         ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = this.color;
         ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x, y, 5.5, 0, Math.PI * 2);
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth = 2;
-        ctx.stroke();
       }
 
       ctx.restore();
@@ -324,8 +300,8 @@
       ctx.save();
       ctx.strokeStyle = cssVar('--chart-grid');
       ctx.lineWidth = 1;
-      for (let i = 0; i <= 3; i += 1) {
-        const y = plot.y + (plot.height / 3) * i;
+      for (let i = 0; i <= 4; i += 1) {
+        const y = plot.y + (plot.height / 4) * i;
         ctx.beginPath();
         ctx.moveTo(plot.x, y);
         ctx.lineTo(plot.x + plot.width, y);
@@ -343,31 +319,41 @@
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'right';
       if (yRange) {
-        const yTicks = buildYTicks(yRange, 3);
+        const yTicks = buildYTicks(yRange, 4);
         yTicks.forEach((value, index) => {
           const y = plot.y + (plot.height / (yTicks.length - 1 || 1)) * index;
           ctx.fillText(formatNumber(value), plot.x - 8, y);
         });
       }
 
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      buildXTicks(this.viewX, 3).forEach((tick) => {
-        const x = plot.x + ((tick - this.viewX.min) / (this.viewX.max - this.viewX.min)) * plot.width;
-        ctx.fillText(formatAxisDate.format(new Date(tick)), x, plot.y + plot.height + 7);
-      });
-      ctx.restore();
-
-      if (!this.hoveredPoint && this.filteredData.length) {
-        this.showPassiveTooltip(this.filteredData[this.filteredData.length - 1]);
+      if (this.viewX && this.viewX.max > this.viewX.min) {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        buildXTicks(this.viewX, 3).forEach((tick) => {
+          const x = plot.x + ((tick - this.viewX.min) / (this.viewX.max - this.viewX.min)) * plot.width;
+          ctx.fillText(formatAxisDate.format(new Date(tick)), x, plot.y + plot.height + 7);
+        });
       }
+      ctx.restore();
+    }
+
+    drawEmptyState(plot) {
+      const ctx = this.ctx;
+      if (!plot) return;
+      ctx.save();
+      ctx.fillStyle = cssVar('--text-muted');
+      ctx.font = '14px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Нет данных', plot.x + plot.width / 2, plot.y + plot.height / 2);
+      ctx.restore();
     }
 
     updateSummary() {
       if (!this.lastEl || !this.rangeEl) return;
       if (!this.data.length) {
-        this.lastEl.textContent = '—';
-        this.rangeEl.textContent = '—';
+        this.lastEl.textContent = 'Последнее: —';
+        this.rangeEl.textContent = 'Диапазон: —';
         return;
       }
       const lastPoint = this.data[this.data.length - 1];
@@ -379,41 +365,6 @@
       });
       this.lastEl.textContent = `Последнее: ${formatNumber(lastPoint.y)} ${this.unit}`;
       this.rangeEl.textContent = `Диапазон: ${formatNumber(min)} … ${formatNumber(max)}`;
-    }
-
-    showPassiveTooltip(point) {
-      if (!point || this.drag) return;
-      const plot = this.getPlotRect();
-      const yRange = this.getYRange(this.filteredData);
-      if (!plot || !yRange || !this.viewX) return;
-      const x = plot.x + ((point.x - this.viewX.min) / (this.viewX.max - this.viewX.min)) * plot.width;
-      const y = plot.y + plot.height - ((point.y - yRange.min) / (yRange.max - yRange.min)) * plot.height;
-      this.placeTooltip(point, x, y);
-    }
-
-    placeTooltip(point, x, y) {
-      if (!point) return this.hideTooltip();
-      this.tooltipEl.hidden = false;
-      this.tooltipEl.innerHTML = `
-        <strong>${this.label}</strong>
-        <div>${formatTooltipDate.format(new Date(point.x))}</div>
-        <div>${formatNumber(point.y)} ${this.unit}</div>
-      `;
-      const rect = this.stage.getBoundingClientRect();
-      const tooltipRect = this.tooltipEl.getBoundingClientRect();
-      let left = x + 10;
-      let top = y - 10;
-      if (left + tooltipRect.width > rect.width - 8) left = x - tooltipRect.width - 10;
-      if (top + tooltipRect.height > rect.height - 8) top = rect.height - tooltipRect.height - 8;
-      if (top < 8) top = 8;
-      if (left < 8) left = 8;
-      this.tooltipEl.style.left = `${left}px`;
-      this.tooltipEl.style.top = `${top}px`;
-    }
-
-    hideTooltip() {
-      this.tooltipEl.hidden = true;
-      this.tooltipEl.innerHTML = '';
     }
 
     screenToData(x, y) {
@@ -463,17 +414,13 @@
 
     onPointerMove(event) {
       if (this.drag) return;
-      const found = this.findClosestPoint(event.clientX, event.clientY);
-      this.hoveredPoint = found;
-      if (found) this.placeTooltip(found.point, found.localX, found.localY);
-      else this.hideTooltip();
+      this.hoveredPoint = this.findClosestPoint(event.clientX, event.clientY);
       this.draw();
     }
 
     onPointerLeave() {
       if (this.drag) return;
       this.hoveredPoint = null;
-      this.hideTooltip();
       this.draw();
     }
 
@@ -651,7 +598,9 @@
 
   function refreshDeviceMeta() {
     const device = findDeviceByHash(state.selectedDeviceHash);
-    refs.deviceMeta.textContent = device ? `${device.name} · ${device.thingspeak_url}` : 'Устройство не выбрано';
+    const text = device ? `${device.name} · ${device.thingspeak_url}` : 'Устройство не выбрано';
+    if (refs.deviceMeta) refs.deviceMeta.textContent = text;
+    if (refs.deviceSelect) refs.deviceSelect.title = text;
   }
 
   function refreshDeviceSelect() {

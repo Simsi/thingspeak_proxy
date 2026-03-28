@@ -19,21 +19,18 @@
 </head>
 <body class="monitor-page">
   <div class="app-frame">
-    <header class="topbar">
-      <div class="topbar__brand">
-        <span class="brand-kicker">ThingSpeak Monitor</span>
+    <header class="topbar topbar--compact">
+      <div class="topbar__brand topbar__brand--compact">
+        <span class="brand-kicker">ThingSpeak</span>
         <strong>Мониторинг</strong>
       </div>
 
-      <div class="device-bar">
-        <label class="device-picker" for="device-select">
-          <span class="field-caption">Устройство</span>
-          <select id="device-select"></select>
-        </label>
-        <div id="device-meta" class="device-meta"></div>
+      <div class="device-bar device-bar--compact">
+        <select id="device-select" aria-label="Выбор устройства"></select>
+        <div id="device-meta" class="device-meta sr-only"></div>
       </div>
 
-      <div class="topbar__actions">
+      <div class="topbar__actions topbar__actions--compact">
         <div class="theme-switch" role="group" aria-label="Тема интерфейса">
           <button type="button" class="theme-switch__button" data-theme-value="light">Светлая</button>
           <button type="button" class="theme-switch__button" data-theme-value="dark">Тёмная</button>
@@ -51,88 +48,64 @@
 
         <div class="charts-grid">
           <article class="chart-card" data-field="warm_stream">
-            <div class="chart-card__header">
+            <div class="chart-card__header chart-card__header--compact">
               <div>
                 <h2>Тепловой поток</h2>
                 <p>Вт/м²</p>
               </div>
-              <div class="chart-tools">
-                <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
-                <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
-              </div>
             </div>
-            <div class="chart-stage">
+            <div class="chart-stage chart-stage--large">
               <canvas id="chart-warm-stream" class="chart-canvas"></canvas>
-              <div class="chart-empty" hidden>Нет данных</div>
-              <div class="chart-tooltip" hidden></div>
             </div>
-            <div class="chart-meta">
+            <div class="chart-meta chart-meta--compact">
               <span data-field-last="warm_stream">—</span>
               <span data-field-range="warm_stream">—</span>
             </div>
           </article>
 
           <article class="chart-card" data-field="surface_temp">
-            <div class="chart-card__header">
+            <div class="chart-card__header chart-card__header--compact">
               <div>
                 <h2>Температура поверхности</h2>
                 <p>°C</p>
               </div>
-              <div class="chart-tools">
-                <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
-                <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
-              </div>
             </div>
-            <div class="chart-stage">
+            <div class="chart-stage chart-stage--large">
               <canvas id="chart-surface-temp" class="chart-canvas"></canvas>
-              <div class="chart-empty" hidden>Нет данных</div>
-              <div class="chart-tooltip" hidden></div>
             </div>
-            <div class="chart-meta">
+            <div class="chart-meta chart-meta--compact">
               <span data-field-last="surface_temp">—</span>
               <span data-field-range="surface_temp">—</span>
             </div>
           </article>
 
           <article class="chart-card" data-field="air_temp">
-            <div class="chart-card__header">
+            <div class="chart-card__header chart-card__header--compact">
               <div>
                 <h2>Температура воздуха</h2>
                 <p>°C</p>
               </div>
-              <div class="chart-tools">
-                <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
-                <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
-              </div>
             </div>
-            <div class="chart-stage">
+            <div class="chart-stage chart-stage--large">
               <canvas id="chart-air-temp" class="chart-canvas"></canvas>
-              <div class="chart-empty" hidden>Нет данных</div>
-              <div class="chart-tooltip" hidden></div>
             </div>
-            <div class="chart-meta">
+            <div class="chart-meta chart-meta--compact">
               <span data-field-last="air_temp">—</span>
               <span data-field-range="air_temp">—</span>
             </div>
           </article>
 
           <article class="chart-card" data-field="air_hum">
-            <div class="chart-card__header">
+            <div class="chart-card__header chart-card__header--compact">
               <div>
                 <h2>Влажность воздуха</h2>
                 <p>%</p>
               </div>
-              <div class="chart-tools">
-                <button type="button" class="chip-button" data-chart-action="fit-y">Y-fit</button>
-                <button type="button" class="chip-button" data-chart-action="reset">Сброс</button>
-              </div>
             </div>
-            <div class="chart-stage">
+            <div class="chart-stage chart-stage--large">
               <canvas id="chart-air-hum" class="chart-canvas"></canvas>
-              <div class="chart-empty" hidden>Нет данных</div>
-              <div class="chart-tooltip" hidden></div>
             </div>
-            <div class="chart-meta">
+            <div class="chart-meta chart-meta--compact">
               <span data-field-last="air_hum">—</span>
               <span data-field-range="air_hum">—</span>
             </div>
@@ -141,11 +114,10 @@
       </section>
 
       <aside class="side-panel">
-        <section class="data-card">
-          <div class="data-card__header">
+        <section class="data-card data-card--square">
+          <div class="data-card__header data-card__header--compact">
             <div>
               <h3>Устройства</h3>
-              <p>Имя и ссылка ThingSpeak</p>
             </div>
             <div class="data-card__actions">
               <button type="button" id="add-device" class="chip-button">Добавить</button>
@@ -176,11 +148,10 @@
           </div>
         </section>
 
-        <section class="data-card">
-          <div class="data-card__header">
+        <section class="data-card data-card--square">
+          <div class="data-card__header data-card__header--compact">
             <div>
               <h3>Конечные серверы</h3>
-              <p>Список POST-приёмников</p>
             </div>
             <div class="data-card__actions">
               <button type="button" id="add-destination" class="chip-button">Добавить</button>
