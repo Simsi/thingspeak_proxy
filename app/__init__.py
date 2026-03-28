@@ -59,6 +59,14 @@ def create_app() -> Flask:
     app.register_blueprint(bp)
 
     if os.getenv("ENABLE_POLLER", "1") == "1":
+        try:
+            poller.backfill_existing_data()
+        except Exception as exc:
+            runtime_status.last_error = f"Ошибка исторической загрузки: {exc}"
+            logging.getLogger(__name__).exception(
+                "Историческая загрузка данных ThingSpeak при старте завершилась с ошибкой: %s",
+                exc,
+            )
         poller.start()
         atexit.register(poller.stop)
 

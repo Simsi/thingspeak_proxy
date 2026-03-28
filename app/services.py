@@ -5,7 +5,7 @@ import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from json import JSONDecodeError
 from typing import Any
@@ -30,6 +30,7 @@ class ThingSpeakClient:
         "https://api.thingspeak.com",
         "https://thingspeak.mathworks.com",
     )
+    MAX_RESULTS_PER_REQUEST = 8000
 
     def __init__(self, results_per_request: int = 100) -> None:
         self.results_per_request = results_per_request
@@ -42,6 +43,84 @@ class ThingSpeakClient:
         )
 
     def fetch_recent(self, channel_id: str) -> dict[str, Any]:
+        return self._fetch(
+            channel_id,
+            params={"results": min(self.results_per_request, self.MAX_RESULTS_PER_REQUEST)},
+        )
+
+    def fetch_history(self, channel_id: str) -> dict[str, Any]:
+        all_feeds: list[dict[str, Any]] = []
+        seen_entry_ids: set[int] = set()
+        end_cursor: datetime | None = None
+        page_number = 0
+        channel_info: dict[str, Any] = {}
+
+        while True:
+            page_number += 1
+            params: dict[str, Any] = {"results": self.MAX_RESULTS_PER_REQUEST}
+            if end_cursor is not None:
+                params["end"] = format_thingspeak_datetime(end_cursor)
+
+            payload = self._fetch(channel_id, params=params)
+            channel = payload.get("channel")
+            if isinstance(channel, dict) and channel:
+                channel_info = channel
+
+            feeds = payload.get("feeds", [])
+            if not isinstance(feeds, list) or not feeds:
+                break
+
+            page_feeds: list[dict[str, Any]] = []
+            oldest_created_at: datetime | None = None
+
+            for feed in feeds:
+                try:
+                    entry_id = int(feed.get("entry_id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if entry_id <= 0 or entry_id in seen_entry_ids:
+                    continue
+
+                seen_entry_ids.add(entry_id)
+                page_feeds.append(feed)
+
+                created_at = parse_created_at(feed.get("created_at"))
+                if created_at is not None and (oldest_created_at is None or created_at < oldest_created_at):
+                    oldest_created_at = created_at
+
+            if page_feeds:
+                all_feeds.extend(page_feeds)
+
+            logger.info(
+                "ThingSpeak history backfill page %s for channel %s: received=%s unique=%s",
+                page_number,
+                channel_id,
+                len(feeds),
+                len(page_feeds),
+            )
+
+            if len(feeds) < self.MAX_RESULTS_PER_REQUEST:
+                break
+            if oldest_created_at is None:
+                logger.warning(
+                    "Cannot continue historical backfill for channel %s: oldest item has no created_at",
+                    channel_id,
+                )
+                break
+
+            next_end_cursor = oldest_created_at - timedelta(seconds=1)
+            if end_cursor is not None and next_end_cursor >= end_cursor:
+                logger.warning(
+                    "Stopping historical backfill for channel %s to avoid pagination loop",
+                    channel_id,
+                )
+                break
+            end_cursor = next_end_cursor
+
+        all_feeds.sort(key=lambda item: int(item.get("entry_id") or 0))
+        return {"channel": channel_info, "feeds": all_feeds}
+
+    def _fetch(self, channel_id: str, params: dict[str, Any]) -> dict[str, Any]:
         errors: list[str] = []
 
         for base_url in self.API_BASE_URLS:
@@ -49,8 +128,8 @@ class ThingSpeakClient:
             try:
                 response = self.session.get(
                     url,
-                    params={"results": self.results_per_request},
-                    timeout=(5, 15),
+                    params=params,
+                    timeout=(5, 20),
                 )
                 response.raise_for_status()
 
@@ -80,10 +159,11 @@ class ThingSpeakClient:
                     )
 
                 logger.debug(
-                    "ThingSpeak: канал %s успешно прочитан через %s, записей=%s",
+                    "ThingSpeak: канал %s успешно прочитан через %s, записей=%s, params=%s",
                     channel_id,
                     url,
                     len(feeds),
+                    params,
                 )
                 return data
             except (requests.RequestException, ValueError) as exc:
@@ -162,6 +242,51 @@ class SensorPoller:
         if self.thread:
             self.thread.join(timeout=3)
 
+    def backfill_existing_data(self) -> None:
+        snapshot = self.memory_store.get_snapshot()
+        devices = snapshot.get("devices", [])
+
+        if not devices:
+            logger.info("Историческая загрузка пропущена: список устройств пуст")
+            return
+
+        for device in devices:
+            self._backfill_device(device)
+
+    def _backfill_device(self, device: dict[str, Any]) -> None:
+        device_name = device["name"]
+        device_hash = device["device_hash"]
+        logger.info("Старт исторической загрузки для устройства %s (канал %s)", device_name, device_hash)
+
+        payload = self.thingspeak_client.fetch_history(device_hash)
+        feeds = payload.get("feeds", [])
+        if not isinstance(feeds, list):
+            raise ValueError(f"ThingSpeak вернул некорректное поле feeds для {device_name}")
+
+        inserted_count = 0
+        duplicate_count = 0
+        invalid_count = 0
+        for feed in feeds:
+            try:
+                normalized = normalize_measurement(device_name, device_hash, feed)
+            except ValueError:
+                invalid_count += 1
+                continue
+            inserted = self.database.insert_measurement(normalized)
+            if inserted:
+                inserted_count += 1
+            else:
+                duplicate_count += 1
+
+        logger.info(
+            "Историческая загрузка устройства %s завершена: получено=%s, добавлено=%s, уже было=%s, пропущено некорректных=%s",
+            device_name,
+            len(feeds),
+            inserted_count,
+            duplicate_count,
+            invalid_count,
+        )
+
     def _run_forever(self) -> None:
         while not self.stop_event.is_set():
             try:
@@ -209,15 +334,18 @@ class SensorPoller:
             inserted = self.database.insert_measurement(normalized)
             if inserted:
                 inserted_count += 1
-                self.dispatcher.dispatch(destinations, {
-                    "device_name": normalized["device_name"],
-                    "device_hash": normalized["device_hash"],
-                    "event_id": normalized["event_id"],
-                    "air_temp": normalized["air_temp"],
-                    "air_hum": normalized["air_hum"],
-                    "warm_stream": normalized["warm_stream"],
-                    "surface_temp": normalized["surface_temp"],
-                })
+                self.dispatcher.dispatch(
+                    destinations,
+                    {
+                        "device_name": normalized["device_name"],
+                        "device_hash": normalized["device_hash"],
+                        "event_id": normalized["event_id"],
+                        "air_temp": normalized["air_temp"],
+                        "air_hum": normalized["air_hum"],
+                        "warm_stream": normalized["warm_stream"],
+                        "surface_temp": normalized["surface_temp"],
+                    },
+                )
 
         logger.info("Устройство %s: добавлено новых записей %s", device_name, inserted_count)
 
@@ -261,6 +389,11 @@ def parse_created_at(value: Any) -> datetime | None:
         return parsedate_to_datetime(value)
     except (TypeError, ValueError, IndexError):
         return None
+
+
+
+def format_thingspeak_datetime(value: datetime) -> str:
+    return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 
