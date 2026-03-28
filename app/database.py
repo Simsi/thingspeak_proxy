@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
 from typing import Iterator
 
 from sqlalchemy import create_engine, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Base, Measurement
@@ -46,22 +45,27 @@ class Database:
             return int(result or 0)
 
     def insert_measurement(self, payload: dict) -> bool:
-        measurement = Measurement(
-            device_name=payload["device_name"],
-            device_hash=payload["device_hash"],
-            event_id=payload["event_id"],
-            air_temp=payload.get("air_temp"),
-            air_hum=payload.get("air_hum"),
-            warm_stream=payload.get("warm_stream"),
-            surface_temp=payload.get("surface_temp"),
-            source_created_at=payload.get("source_created_at"),
+        values = {
+            "device_name": payload["device_name"],
+            "device_hash": payload["device_hash"],
+            "event_id": payload["event_id"],
+            "air_temp": payload.get("air_temp"),
+            "air_hum": payload.get("air_hum"),
+            "warm_stream": payload.get("warm_stream"),
+            "surface_temp": payload.get("surface_temp"),
+            "source_created_at": payload.get("source_created_at"),
+        }
+
+        stmt = (
+            pg_insert(Measurement)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["device_hash", "event_id"])
+            .returning(Measurement.id)
         )
-        try:
-            with self.session() as session:
-                session.add(measurement)
-            return True
-        except IntegrityError:
-            return False
+
+        with self.session() as session:
+            inserted_id = session.execute(stmt).scalar_one_or_none()
+            return inserted_id is not None
 
     def get_measurements(self, device_name: str, limit: int = 120) -> list[Measurement]:
         with self.session() as session:
