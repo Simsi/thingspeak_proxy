@@ -5,6 +5,7 @@
   const deviceSelect = document.getElementById('device-select');
   const devicesTable = document.getElementById('devices-table');
   const destinationsTable = document.getElementById('destinations-table');
+  const selectedDeviceMeta = document.getElementById('selected-device-meta');
 
   function showMessage(text, type = 'success') {
     if (!messageBox) return;
@@ -103,12 +104,34 @@
     }).filter((item) => Object.values(item).some(Boolean));
   }
 
-  function refreshDeviceSelect(devices, preserveValue) {
-    const selected = preserveValue || deviceSelect.value;
+  function getSelectedDevice() {
+    if (!deviceSelect || !deviceSelect.selectedOptions || deviceSelect.selectedOptions.length === 0) {
+      return null;
+    }
+    const option = deviceSelect.selectedOptions[0];
+    return {
+      deviceHash: option.value || '',
+      deviceName: option.dataset.deviceName || '',
+    };
+  }
+
+  function updateSelectedDeviceMeta() {
+    if (!selectedDeviceMeta) return;
+    const selected = getSelectedDevice();
+    if (!selected || !selected.deviceHash) {
+      selectedDeviceMeta.textContent = 'Устройство не выбрано';
+      return;
+    }
+    selectedDeviceMeta.textContent = `Устройство: ${selected.deviceName} · канал ${selected.deviceHash}`;
+  }
+
+  function refreshDeviceSelect(devices, preserveHash) {
+    const previousHash = preserveHash || getSelectedDevice()?.deviceHash || '';
     deviceSelect.innerHTML = '';
     devices.forEach((device) => {
       const option = document.createElement('option');
-      option.value = device.name;
+      option.value = device.device_hash;
+      option.dataset.deviceName = device.name;
       option.textContent = `${device.name} (${device.device_hash})`;
       deviceSelect.appendChild(option);
     });
@@ -120,13 +143,36 @@
       deviceSelect.disabled = true;
     } else {
       deviceSelect.disabled = false;
-      const exists = devices.some((device) => device.name === selected);
-      deviceSelect.value = exists ? selected : devices[0].name;
+      const exists = devices.some((device) => device.device_hash === previousHash);
+      deviceSelect.value = exists ? previousHash : devices[0].device_hash;
     }
+    updateSelectedDeviceMeta();
   }
 
   function formatValue(value) {
-    return value == null || Number.isNaN(value) ? '—' : Number(value).toFixed(2);
+    return Number.isFinite(value) ? value.toFixed(2) : '—';
+  }
+
+  function formatShortTimestamp(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('ru-RU', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  function normalizeChartItems(items, fieldName) {
+    return items
+      .map((item) => {
+        const numericValue = Number(item[fieldName]);
+        return {
+          ...item,
+          numericValue: Number.isFinite(numericValue) ? numericValue : null,
+          xLabel: formatShortTimestamp(item.source_created_at || item.inserted_at),
+        };
+      })
+      .filter((item) => item.numericValue !== null);
   }
 
   function renderChart(svgId, items, fieldName, label) {
@@ -134,20 +180,21 @@
     if (!svg) return;
     const width = 500;
     const height = 240;
-    const padLeft = 40;
-    const padRight = 16;
+    const padLeft = 50;
+    const padRight = 20;
     const padTop = 16;
-    const padBottom = 32;
+    const padBottom = 38;
     const plotWidth = width - padLeft - padRight;
     const plotHeight = height - padTop - padBottom;
 
-    const values = items.map((item) => item[fieldName]).filter((x) => x !== null && x !== undefined);
-    if (values.length === 0) {
+    const validItems = normalizeChartItems(items, fieldName);
+    if (validItems.length === 0) {
       svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" fill="#fafafa" />
         <text x="250" y="120" text-anchor="middle" class="placeholder-text">Нет данных для ${label}</text>`;
       return;
     }
 
+    const values = validItems.map((item) => item.numericValue);
     let min = Math.min(...values);
     let max = Math.max(...values);
     if (min === max) {
@@ -155,12 +202,17 @@
       max += 1;
     }
 
-    const validItems = items.filter((item) => item[fieldName] !== null && item[fieldName] !== undefined);
     const points = validItems.map((item, idx) => {
       const x = padLeft + (idx * plotWidth) / Math.max(validItems.length - 1, 1);
-      const y = padTop + ((max - item[fieldName]) * plotHeight) / (max - min);
+      const y = padTop + ((max - item.numericValue) * plotHeight) / (max - min);
       return `${x},${y}`;
     }).join(' ');
+
+    const circles = validItems.map((item, idx) => {
+      const x = padLeft + (idx * plotWidth) / Math.max(validItems.length - 1, 1);
+      const y = padTop + ((max - item.numericValue) * plotHeight) / (max - min);
+      return `<circle cx="${x}" cy="${y}" r="2.8" class="chart-point"></circle>`;
+    }).join('');
 
     const gridLines = [];
     for (let i = 0; i < 5; i += 1) {
@@ -170,39 +222,50 @@
       gridLines.push(`<text class="axis-text" x="6" y="${y + 4}">${value}</text>`);
     }
 
-    const firstEvent = validItems[0]?.event_id ?? '';
-    const lastEvent = validItems[validItems.length - 1]?.event_id ?? '';
+    const firstItem = validItems[0];
+    const lastItem = validItems[validItems.length - 1];
+    const lastValue = lastItem.numericValue;
 
     svg.innerHTML = `
       <rect x="0" y="0" width="${width}" height="${height}" fill="#fafafa" rx="10" ry="10"></rect>
       ${gridLines.join('')}
+      <line class="axis-line" x1="${padLeft}" y1="${height - padBottom}" x2="${width - padRight}" y2="${height - padBottom}"></line>
+      <line class="axis-line" x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${height - padBottom}"></line>
       <polyline class="chart-line" points="${points}"></polyline>
-      <text class="axis-text" x="${padLeft}" y="${height - 10}">event ${firstEvent}</text>
-      <text class="axis-text" x="${width - padRight - 70}" y="${height - 10}">event ${lastEvent}</text>
-      <text class="axis-text" x="${width - 130}" y="18">min ${formatValue(min)} / max ${formatValue(max)}</text>
+      ${circles}
+      <text class="axis-text" x="${padLeft}" y="${height - 10}">${firstItem.xLabel || `event ${firstItem.event_id}`}</text>
+      <text class="axis-text" x="${Math.max(padLeft + 90, width - 150)}" y="${height - 10}">${lastItem.xLabel || `event ${lastItem.event_id}`}</text>
+      <text class="axis-text" x="${width - 165}" y="18">последнее ${formatValue(lastValue)}</text>
     `;
   }
 
-  async function loadMeasurements(deviceName) {
-    if (!deviceName) {
+  async function loadMeasurementsBySelection() {
+    const selected = getSelectedDevice();
+    if (!selected || !selected.deviceHash) {
       renderChart('chart-warm-stream', [], 'warm_stream', 'теплового потока');
       renderChart('chart-surface-temp', [], 'surface_temp', 'температуры поверхности');
       renderChart('chart-air-temp', [], 'air_temp', 'температуры воздуха');
       renderChart('chart-air-hum', [], 'air_hum', 'влажности воздуха');
+      updateSelectedDeviceMeta();
       return;
     }
+
     try {
-      const separator = app.measurements_url.includes('?') ? '&' : '?';
-      const url = `${app.measurements_url}?device_name=${encodeURIComponent(deviceName)}${separator}_ts=${Date.now()}`;
+      updateSelectedDeviceMeta();
+      const params = new URLSearchParams({
+        device_hash: selected.deviceHash,
+        _ts: String(Date.now()),
+      });
+      const url = `${app.measurements_url}?${params.toString()}`;
       const payload = await fetch(url, { credentials: 'same-origin', cache: 'no-store' }).then(readJsonResponse);
-      if (!payload.ok) {
-        throw new Error(payload.error || 'Не удалось загрузить измерения');
-      }
-      const items = payload.items || [];
+      const items = Array.isArray(payload.items) ? payload.items : [];
       renderChart('chart-warm-stream', items, 'warm_stream', 'теплового потока');
       renderChart('chart-surface-temp', items, 'surface_temp', 'температуры поверхности');
       renderChart('chart-air-temp', items, 'air_temp', 'температуры воздуха');
       renderChart('chart-air-hum', items, 'air_hum', 'влажности воздуха');
+      if (items.length === 0) {
+        showMessage(`Для устройства ${selected.deviceName} пока нет данных в БД`, 'error');
+      }
     } catch (error) {
       showMessage(error.message, 'error');
     }
@@ -211,16 +274,16 @@
   async function saveDevices() {
     try {
       const devices = collectTableRows('devices-table');
+      const currentHash = getSelectedDevice()?.deviceHash || '';
       const payload = await requestJson(app.replace_devices_url, {
         method: 'POST',
         credentials: 'same-origin',
         body: JSON.stringify({ devices }),
       });
-      const currentValue = deviceSelect.value;
       devicesTable.querySelector('tbody').innerHTML = '';
       payload.devices.forEach(addDeviceRow);
-      refreshDeviceSelect(payload.devices, currentValue);
-      await loadMeasurements(deviceSelect.value);
+      refreshDeviceSelect(payload.devices, currentHash);
+      await loadMeasurementsBySelection();
       showMessage('Список устройств сохранён');
     } catch (error) {
       showMessage(error.message, 'error');
@@ -256,16 +319,16 @@
   document.getElementById('add-destination')?.addEventListener('click', () => addDestinationRow());
   document.getElementById('save-devices')?.addEventListener('click', saveDevices);
   document.getElementById('save-destinations')?.addEventListener('click', saveDestinations);
-  deviceSelect?.addEventListener('change', () => loadMeasurements(deviceSelect.value));
+  deviceSelect?.addEventListener('change', loadMeasurementsBySelection);
 
-  refreshDeviceSelect(app.devices || [], app.devices?.[0]?.name || '');
-  loadMeasurements(deviceSelect.value);
+  refreshDeviceSelect(app.devices || [], app.devices?.[0]?.device_hash || '');
+  loadMeasurementsBySelection();
 
   const refreshIntervalMs = Number(app.refresh_interval_ms || 15000);
   if (Number.isFinite(refreshIntervalMs) && refreshIntervalMs >= 3000) {
     window.setInterval(() => {
       if (deviceSelect && deviceSelect.value) {
-        loadMeasurements(deviceSelect.value);
+        loadMeasurementsBySelection();
       }
     }, refreshIntervalMs);
   }

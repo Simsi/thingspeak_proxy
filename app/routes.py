@@ -147,12 +147,17 @@ def bootstrap() -> Response:
 @bp.get("/api/measurements")
 @api_login_required
 def measurements() -> Response:
+    device_hash = request.args.get("device_hash", "").strip()
     device_name = request.args.get("device_name", "").strip()
-    if not device_name:
-        return jsonify({"ok": False, "error": "Не передан device_name"}), 400
+    if not device_hash and not device_name:
+        return jsonify({"ok": False, "error": "Не передан device_hash или device_name"}), 400
 
     db = current_app.extensions["database"]
-    rows = db.get_measurements(device_name=device_name, limit=150)
+    if device_hash:
+        rows = db.get_measurements(device_hash=device_hash, limit=300)
+    else:
+        rows = db.get_measurements(device_name=device_name, limit=300)
+
     return jsonify(
         {
             "ok": True,

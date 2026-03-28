@@ -67,14 +67,26 @@ class Database:
             inserted_id = session.execute(stmt).scalar_one_or_none()
             return inserted_id is not None
 
-    def get_measurements(self, device_name: str, limit: int = 120) -> list[Measurement]:
+    def get_measurements(
+        self,
+        *,
+        device_hash: str | None = None,
+        device_name: str | None = None,
+        limit: int = 120,
+    ) -> list[Measurement]:
+        if not device_hash and not device_name:
+            raise ValueError("device_hash или device_name обязателен")
+
         with self.session() as session:
+            stmt = select(Measurement)
+            if device_hash:
+                stmt = stmt.where(Measurement.device_hash == device_hash)
+            else:
+                stmt = stmt.where(Measurement.device_name == device_name)
+
             rows = list(
                 session.execute(
-                    select(Measurement)
-                    .where(Measurement.device_name == device_name)
-                    .order_by(Measurement.event_id.desc())
-                    .limit(limit)
+                    stmt.order_by(Measurement.event_id.desc()).limit(limit)
                 ).scalars()
             )
         rows.reverse()

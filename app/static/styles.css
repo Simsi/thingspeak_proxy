@@ -259,3 +259,12 @@ button {
     flex-direction: column;
   }
 }
+
+.axis-line {
+  stroke: #9ca3af;
+  stroke-width: 1;
+}
+
+.chart-point {
+  fill: #111827;
+}
